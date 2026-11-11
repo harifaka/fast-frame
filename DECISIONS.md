@@ -142,11 +142,28 @@ This file records every non-obvious architectural decision made while implementi
     cleared on container restart while rendered files remain on disk. This avoids a
     database dependency for a single-user studio app and is documented in the README.
 36. **The queue UI is a right-side drawer.** It reuses the same `JobProgress` card as
-    the control panel, so progress, FPS, speed, ETA, fallback notes, output size and
+    the command bar, so progress, FPS, speed, ETA, fallback notes, output size and
     expandable FFmpeg logs look identical in both places.
 37. **README documents the real deployment matrix** — Windows `D:/:/mnt/host/d`,
     Linux `/media:/mnt/host/media`, `gpus: all` vs the `deploy.resources` fallback,
     GPU verification with `nvidia-smi`, CPU mode, permissions and troubleshooting.
+
+## Phase 6 — Focus mode layout
+
+38. **The configuration panel is a slide-over drawer, not a docked sidebar.** A docked column
+    permanently steals width from the preview; the drawer lets `PREVIEW` and `MULTI-CUT TIMELINE`
+    use the whole window and is dismissed with `Esc`, the backdrop or ✕. Card order is unchanged
+    (Presets → Source → Speed → Encoding → Subtitles).
+39. **Sections are independent accordions.** Each card collapses on its own so only the relevant
+    controls stay on screen; `Expand all` / `Collapse all` and the section pills cover both the
+    "everything at once" and "jump to one card" workflows. Sections start expanded so the drawer
+    matches the previous panel on first open.
+40. **Render actions are duplicated on purpose.** The command bar keeps `Render Now`,
+    `+ Add to Queue` and the active destination folder visible at all times, and the drawer footer
+    repeats the actions so a render can be launched while configuring. The command bar also owns
+    the live `JobProgress` card, so render feedback is never hidden behind the drawer.
+41. **Drawer and accordion state are transient.** They live in `App`/`ControlPanel` state and are
+    not persisted; presets and the last destination folder remain the only LocalStorage state.
 
 
 

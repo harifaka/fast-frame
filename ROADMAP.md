@@ -21,7 +21,7 @@ The goal is to build a Dockerized, web-based video processing application utiliz
 
 ---
 
-### 3. The 5-Phase Iterative Development Plan (Step-by-Step)
+### 3. The 6-Phase Iterative Development Plan (Step-by-Step)
 
 ---
 
@@ -130,6 +130,21 @@ Queueing 3 different videos with distinct multi-cut, crop, and speed settings pr
 
 ---
 
+#### 🎛️ PHASE 6: Focus Mode Layout — Configuration Drawer & Always-On Render Bar
+**Goal:** Give the preview and multi-cut timeline the whole window and move every configuration card (Presets, Source, Speed, Encoding, Subtitles) into a toggleable drawer that is summoned on demand.
+
+**Tasks (Frontend):**
+1. **Retire the permanent right column:** `ControlPanel` becomes a right-side slide-over drawer (max 480 px, blurred backdrop, `Esc` / backdrop / ✕ to close). Nothing is docked, so with the drawer closed the `PREVIEW` + `MULTI-CUT TIMELINE` panel spans the full available width and re-expands instantly.
+2. **`⚙️ Configuration` command bar:** an always-visible compact bar above the workspace holding the drawer toggle, live summary pills (`1.25×`, `H.265 / HEVC`, `Subtitles`, `N cuts`, `Output ~mm:ss`), the active `DESTINATION FOLDER` chip, `Render Now` and `+ Add to Queue`.
+3. **Accordion sections inside the drawer:** `PRESETS`, `SOURCE`, `SPEED`, `ENCODING` and `SUBTITLES` collapse/expand independently with a single `Expand all` / `Collapse all` control. Section pills at the top of the drawer jump straight to one card, and the command-bar summary pills deep-link to the matching section.
+4. **Primary actions stay reachable:** `Render Now` and `+ Add to Queue` live in the command bar *and* in the drawer footer, so a render can be started whether the drawer is open or closed.
+5. **`Browse files` in the PREVIEW header** in addition to the empty-state `Browse host files` call to action, so a new source can be picked at any time.
+
+**Phase 6 Definition of Done:**
+The studio opens with the preview spanning the full width of the window, every configuration card is only reachable through the `Configuration` drawer, and `Render Now` works without ever opening it.
+
+---
+
 ### 4. Target Project Directory Structure
 
 ```text
@@ -156,7 +171,8 @@ video-speed-studio/
     └── src/
         ├── App.jsx
         ├── components/
+        │   ├── CommandBar.jsx      # Configuration toggle, summary pills, destination, Render Now / + Add to Queue
         │   ├── FileBrowser.jsx     # Source file & Target directory browser
         │   ├── VideoWorkspace.jsx  # Video player preview, Crop overlay, Multi-Cut timeline
-        │   ├── ControlPanel.jsx    # Speed, HEVC/H264, Rotation, Subtitles settings
+        │   ├── ControlPanel.jsx    # Configuration drawer: collapsible Presets, Source, Speed, Encoding, Subtitles
         │   └── RenderQueue.jsx     # Live progress bar & Batch queue manager

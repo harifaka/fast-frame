@@ -131,9 +131,25 @@ Equivalently, without Compose: `docker run --gpus all -p 8000:8000 -v D:/:/mnt/h
 
 ## 4. Using the studio
 
-1. **Pick a source** — `Choose` opens the zero-copy browser. Only `.mp4`, `.mkv`, `.avi` are
+The `PREVIEW` + `MULTI-CUT TIMELINE` panel owns the whole window. Everything else lives behind the
+**`⚙️ Configuration`** button in the command bar above it:
+
+- Summary pills mirror the live settings (`1.25×`, `H.265 / HEVC`, `Subtitles`, `N cuts`,
+  `Output ~mm:ss`) — click one to jump straight to the matching card.
+- `Destination: /mnt/host` shows and changes the output folder.
+- `Render Now` and `+ Add to Queue` are always here, so a render can be started without opening the
+  drawer. The active job's progress card appears right below the bar.
+
+The drawer slides in from the right (`Esc`, the backdrop or ✕ closes it) and holds five collapsible
+cards — `PRESETS`, `SOURCE`, `SPEED`, `ENCODING`, `SUBTITLES`. The pills at the top of the drawer
+jump to a card, and `Expand all` / `Collapse all` opens or folds every card at once. `Render Now`
+and `+ Add to Queue` are repeated in the drawer footer.
+
+1. **Pick a source** — `Browse files` in the preview header (or `Choose` in the drawer's `SOURCE`
+   card) opens the zero-copy browser. Only `.mp4`, `.mkv`, `.avi` are
    selectable; clicking a folder enters it, double-clicking a file selects it.
-2. **Pick a destination** — the folder where the render is written on the host. Defaults to the
+2. **Pick a destination** — click `Destination: …` in the command bar (or the destination row in
+   `ENCODING`) to choose the folder where the render is written on the host. Defaults to the
    source file's folder. The source is never modified.
 3. **Speed** — preset buttons (`0.5×`…`3×`), the `+0.25` button, or the slider (`0.25×`–`4×`). The
    preview's `playbackRate` follows instantly; audio pitch is preserved in the render.
@@ -151,7 +167,8 @@ Equivalently, without Compose: `docker run --gpus all -p 8000:8000 -v D:/:/mnt/h
 9. **Presets** — `Save current` stores speed/codec/subtitle-size; built-ins are
    *Fast Review (1.5× HEVC)* and *2× Speedup (H.264)*. Saved presets live in LocalStorage.
 
-Keyboard shortcuts: `Space` play/pause, `←`/`→` seek ±5 s, `M` mute.
+Keyboard shortcuts: `Space` play/pause, `←`/`→` seek ±5 s, `M` mute, `Esc` close the configuration
+drawer.
 
 > The queue lives in memory: restarting the container clears the job list (rendered files stay on
 > disk). Presets and the last destination folder are stored in your browser's LocalStorage.
@@ -312,6 +329,11 @@ fast-frame/
 │       ├── gpu_service.py     # nvidia-smi + encoder detection
 │       └── worker.py          # async queue, FFmpeg runner, progress parser
 ├── frontend/                  # React + Vite + Tailwind studio UI
+│   └── src/components/
+│       ├── CommandBar.jsx     # Configuration toggle, summary pills, destination, render actions
+│       ├── ControlPanel.jsx   # Slide-over configuration drawer with collapsible cards
+│       ├── VideoWorkspace.jsx # Preview player, rotate/crop toolbar, multi-cut timeline
+│       └── RenderQueue.jsx    # Live progress & batch queue drawer
 └── backend/tests/             # command-builder & queue helper tests
 ```
 

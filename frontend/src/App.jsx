@@ -6,6 +6,7 @@ import Header from './components/Header'
 import FileBrowser from './components/FileBrowser'
 import VideoWorkspace from './components/VideoWorkspace'
 import ControlPanel from './components/ControlPanel'
+import CommandBar from './components/CommandBar'
 import Timeline from './components/Timeline'
 import RenderQueue from './components/RenderQueue'
 
@@ -51,6 +52,16 @@ export default function App() {
   const [subtitleFiles, setSubtitleFiles] = useState([])
   const [subtitlesLoading, setSubtitlesLoading] = useState(false)
   const [queueOpen, setQueueOpen] = useState(false)
+  const [configOpen, setConfigOpen] = useState(false)
+  const [configRequest, setConfigRequest] = useState(null)
+
+  const openConfig = useCallback((section = null) => {
+    setQueueOpen(false)
+    setConfigRequest({ id: section, nonce: Date.now() })
+    setConfigOpen(true)
+  }, [])
+
+  const closeConfig = useCallback(() => setConfigOpen(false), [])
 
   const updateSettings = useCallback(
     (patch) => {
@@ -334,7 +345,10 @@ export default function App() {
         queuedCount={queuedCount}
         activeCount={activeCount}
         queueOpen={queueOpen}
-        onToggleQueue={() => setQueueOpen((value) => !value)}
+        onToggleQueue={() => {
+          setConfigOpen(false)
+          setQueueOpen((value) => !value)
+        }}
       />
 
       {notice && (
@@ -360,8 +374,27 @@ export default function App() {
         </div>
       )}
 
-      <main className="mx-auto flex w-full max-w-[1800px] flex-1 flex-col gap-4 p-4 xl:flex-row xl:items-start">
-        <div className="flex min-h-[60vh] flex-1 flex-col gap-4">
+      <main className="mx-auto flex w-full max-w-[1800px] flex-1 flex-col gap-3 p-4">
+        <CommandBar
+          metadata={metadata}
+          settings={settings}
+          targetDir={targetDir}
+          hostRoot={appConfig?.host_root}
+          activeJob={progressJob}
+          onCancelJob={cancelJob}
+          onBrowseTarget={() => {
+            setConfigOpen(false)
+            setBrowser({ mode: 'target' })
+          }}
+          onOpenConfig={openConfig}
+          configOpen={configOpen}
+          onSubmit={submitRender}
+          submitting={submitting}
+          metadataLoading={metadataLoading}
+          canRender={Boolean(sourcePath && targetDir && metadata)}
+        />
+
+        <div className="flex min-h-[60vh] flex-1 flex-col">
           <VideoWorkspace
             sourcePath={sourcePath}
             metadata={metadata}
@@ -385,29 +418,6 @@ export default function App() {
             />
           </VideoWorkspace>
         </div>
-
-        <aside className="flex w-full shrink-0 flex-col gap-4 xl:w-[400px]">
-          <ControlPanel
-            metadata={metadata}
-            sourcePath={sourcePath}
-            targetDir={targetDir}
-            hostRoot={appConfig?.host_root}
-            onBrowseSource={() => setBrowser({ mode: 'source' })}
-            onBrowseTarget={() => setBrowser({ mode: 'target' })}
-            settings={settings}
-            onChange={updateSettings}
-            metadataLoading={metadataLoading}
-            gpu={gpuInfo}
-            activeJob={progressJob}
-            onCancelJob={cancelJob}
-            onSubmit={submitRender}
-            submitting={submitting}
-            canRender={Boolean(sourcePath && targetDir && metadata)}
-            subtitleFiles={subtitleFiles}
-            onRefreshSubtitles={() => loadSubtitles(sourcePath)}
-            subtitlesLoading={subtitlesLoading}
-          />
-        </aside>
       </main>
 
       <FileBrowser
@@ -435,6 +445,30 @@ export default function App() {
         onCancel={cancelJob}
         onDismiss={dismissJob}
         onClearCompleted={clearCompleted}
+      />
+
+      <ControlPanel
+        open={configOpen}
+        onClose={closeConfig}
+        focusSection={configRequest}
+        metadata={metadata}
+        sourcePath={sourcePath}
+        targetDir={targetDir}
+        hostRoot={appConfig?.host_root}
+        onBrowseSource={() => {
+          setConfigOpen(false)
+          setBrowser({ mode: 'source' })
+        }}
+        onBrowseTarget={() => setBrowser({ mode: 'target' })}
+        settings={settings}
+        onChange={updateSettings}
+        gpu={gpuInfo}
+        onSubmit={submitRender}
+        submitting={submitting}
+        canRender={Boolean(sourcePath && targetDir && metadata)}
+        subtitleFiles={subtitleFiles}
+        onRefreshSubtitles={() => loadSubtitles(sourcePath)}
+        subtitlesLoading={subtitlesLoading}
       />
     </div>
   )

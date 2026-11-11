@@ -345,11 +345,20 @@ export default function VideoWorkspace({
   return (
     <section className="panel flex min-h-0 flex-1 flex-col overflow-hidden">
       <div className="panel-header shrink-0">
-        <div className="panel-title">
+        <div className="panel-title shrink-0">
           <FileVideo className="h-3.5 w-3.5 text-accent-400" />
           Preview
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={onBrowseSource}
+            className="btn-ghost !px-2 !py-1 !text-[11px]"
+            title="Browse host drives for a video"
+          >
+            <FolderOpen className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">Browse files</span>
+          </button>
           {metadata && (
             <>
               <span className="chip">

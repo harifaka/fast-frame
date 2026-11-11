@@ -1,6 +1,6 @@
 # Fast-Frame — Implementation Summary
 
-All five phases from `ROADMAP.md` are implemented, verified and committed.
+All six phases from `ROADMAP.md` are implemented, verified and committed.
 
 ## ▶ Run it when you're back
 
@@ -82,6 +82,19 @@ Full setup, troubleshooting and API docs: [`README.md`](README.md). Every autono
   save/apply/delete (speed, codec, subtitle size, GPU preference).
 - Production `README.md` (Windows/Linux mounts, `--gpus all`, CPU fallback, API, troubleshooting).
 
+### Phase 6 — Focus mode layout (configuration drawer & always-on render bar)
+- The permanent right column is gone: `ControlPanel` is now a right-side slide-over drawer
+  (480 px, blurred backdrop, `Esc` / backdrop / ✕ to close) and the `PREVIEW` + `MULTI-CUT
+  TIMELINE` panel uses the full window width.
+- New `CommandBar` above the workspace: `⚙️ Configuration` toggle, live summary pills
+  (`1.25×`, `H.265 / HEVC`, `Subtitles`, `N cuts`, `Output ~mm:ss`), the active destination folder,
+  `Render Now` and `+ Add to Queue` — plus the live `JobProgress` card while a render runs.
+- Drawer sections are independent accordions (`PRESETS`, `SOURCE`, `SPEED`, `ENCODING`,
+  `SUBTITLES`) with `Expand all` / `Collapse all`; section pills jump and scroll to a card, and the
+  command-bar pills deep-link into the matching section.
+- `Render Now` / `+ Add to Queue` also live in the drawer footer, so a render can be started
+  without closing it. `Browse files` was added next to the `PREVIEW` title.
+
 ---
 
 ## Verification performed
@@ -100,10 +113,14 @@ Full setup, troubleshooting and API docs: [`README.md`](README.md). Every autono
   - 90° rotation + flip + crop: 640×360 → 180×320 (custom crop) and 324×324 (1:1 preset), matching
     the preview.
   - NVENC driver mismatch on the test machine triggered the automatic CPU retry and completed.
-- **Frontend builds cleanly** (`npm run build`, ~229 kB JS / 32 kB CSS) and was exercised in a real
+- **Frontend builds cleanly** (`npm run build`, ~237 kB JS / 34 kB CSS) and was exercised in a real
   browser: file browsing, metadata, playback-rate sync, timeline segment creation, subtitle
   auto-detect, rotation/crop overlay dragging, queueing 3 jobs, cancel, clear finished, preset
   save/apply.
+- **Focus-mode layout verified in the browser**: configuration drawer opens/closes via button,
+  summary pill, backdrop and `Esc`; accordion `Collapse all` / `Expand all`; jump pills scroll to
+  the right card; no horizontal overflow at 470 px / 700 px / 1070 px viewport widths; the preview
+  panel spans the full width while the drawer is closed.
 - **`docker-compose.yml` parses** with `gpus: all` and the documented volume mounts.
 
 > Docker itself is not installed in this environment, so the container image build was validated by
@@ -127,3 +144,5 @@ Full setup, troubleshooting and API docs: [`README.md`](README.md). Every autono
 - Queue history is in-memory; rendered files persist on disk.
 - Burned subtitles rotate with the video because `ROADMAP.md` fixes the pipeline order
   (subtitles first).
+- Layout is focus-mode: configuration lives in a slide-over drawer, while the destination and the
+  render actions stay in an always-visible command bar (and are duplicated in the drawer footer).
