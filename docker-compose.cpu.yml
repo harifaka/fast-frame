@@ -1,0 +1,13 @@
+# CPU-only override for machines without an NVIDIA driver / Container Toolkit.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.cpu.yml up --build -d
+#
+# Renders fall back to libx264/libx265 automatically; /api/system/gpu-check
+# reports status "fallback" with the reason.
+services:
+  fast-frame:
+    # Drop the GPU device request inherited from docker-compose.yml.
+    gpus: []
+    environment:
+      NVIDIA_VISIBLE_DEVICES: ""
+      NVIDIA_DRIVER_CAPABILITIES: ""

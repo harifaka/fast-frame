@@ -16,6 +16,8 @@ reads the source file and writes the result directly on the host filesystem. You
 | **Interactive crop** | Draggable/resizable overlay with Free / 16:9 / 9:16 / 1:1 presets, even-pixel rounding |
 | **Batch queue** | Sequential GPU rendering, live progress/FPS/ETA, cancel, error logs, collision-safe names |
 | **Presets** | Save speed/codec/subtitle-size combos in LocalStorage |
+| **Auto host drives** | Every Windows drive + USB all at once via `/mnt/host/drives`, one-click Quick drives bar, no `.env` |
+| **Network / NAS / URL** | HTTP(S), RTSP, RTMP and WebDAV streams plus SMB/NAS shares as source *or* destination |
 
 ---
 
@@ -23,7 +25,8 @@ reads the source file and writes the result directly on the host filesystem. You
 
 - **Docker Desktop** (Windows/macOS) or Docker Engine + Compose v2 (Linux), with **WSL2** backend on Windows.
 - An **NVIDIA GPU** (GTX 10xx / RTX 20xx+), a recent driver, and the
-  **[NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)**.
+  **[NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)**
+  — or skip the GPU entirely with [`docker-compose.cpu.yml`](#cpu-only-mode-no-nvidia-driver--toolkit).
 - Verify GPU passthrough works before building:
 
 ```bash
@@ -35,53 +38,42 @@ to `libx264`/`libx265` (see [CPU fallback](#7-cpu-fallback--no-gpu)).
 
 ---
 
-## 2. Configure host drive access (the only required edit)
+## 2. Host drives are mounted automatically (zero config)
 
-All media access is relative to **`HOST_MOUNT_PATH`**, which defaults to **`/mnt/host`** inside the
-container. Map the folders you want to see in the UI to `/mnt/host/<name>` in `docker-compose.yml`.
+The shipped `docker-compose.yml` already exposes the host, so there is nothing to edit before the
+first run:
 
-### Windows (Docker Desktop + WSL2)
+| Container path | Host source | What it is |
+| --- | --- | --- |
+| `/mnt/host/drives` | `/run/desktop/mnt/host` | Docker Desktop (WSL2) host root: every Windows drive (`drives/c`, `drives/d`, …) **and USB drives** |
+| `/mnt/host/c` | `C:/` | Direct fallback access to the main Windows `C:` drive |
+| `/mnt/host/media` | `./media` | Portable folder next to `docker-compose.yml` |
+| `/mnt/host/network` | named volume | Kernel `mount.cifs` SMB shares |
 
-Map whole drives, one mount per drive letter. Inside the container they appear as `/mnt/host/d`,
-`/mnt/host/e`, …:
+The `Browse files` modal opens with a **Quick drives** bar listing the detected drives (`C:`, `D:`,
+`E:` …), `Users` and `Media`, so a source or destination is one click away. Docker Desktop's
+internal WSL folders (`wslg`, `shm`, `wsl`) are hidden from the listing.
 
-```yaml
-    volumes:
-      - D:/:/mnt/host/d
-      - E:/:/mnt/host/e
-```
+### Linux hosts
 
-> Use the **drive-letter** form (`D:/`), not `\\wsl$\...` or `/mnt/d`. Docker Desktop shares drives
-> through WSL2 and this form keeps NTFS permissions predictable. Ensure the drive is shared under
-> *Docker Desktop → Settings → Resources → File sharing*.
-
-### Linux
+Replace the two Windows mounts with the folders you want to expose:
 
 ```yaml
     volumes:
       - /media:/mnt/host/media
       - /run/media:/mnt/host/run-media
-      - /srv/video:/mnt/host/video
 ```
 
 USB drives usually appear under `/media/$USER/<label>` or `/run/media/$USER/<label>`; mapping the
-parent directory (`/media`, `/run/media`) makes every plugged-in drive visible in one place.
+parent directory makes every plugged-in drive visible in one place. `HOST_MOUNT_PATH` can be
+changed via environment variable if a different container root is wanted.
 
-### Portable default
-
-The shipped compose file maps `./media` so the stack works out of the box:
-
-```yaml
-    volumes:
-      - ./media:/mnt/host/media
-```
-
-Put files in `./media` (created next to `docker-compose.yml`) or replace the line with your drive
-mapping above. `HOST_MOUNT_PATH` can be changed via the environment variable if you want a different
-container root.
-
-**Security:** every path is resolved (symlinks included) and checked against `HOST_MOUNT_PATH`;
-anything outside it returns HTTP 403. Only the folders you mount are reachable.
+**Security:** every requested path is normalised lexically first, so `..` traversal outside
+`HOST_MOUNT_PATH` always returns HTTP 403. The path is then resolved and must stay inside the
+root; resolution may cross the mount boundary **only** inside the drive bind mounts
+(`/mnt/host/drives`, `/mnt/host/c`) or below a real mount point — that is how Docker Desktop and
+USB drives are exposed, and rejecting it was what produced false 403s before. Any other symlink
+that points outside the root is rejected.
 
 ---
 
@@ -91,7 +83,14 @@ anything outside it returns HTTP 403. Only the folders you mount are reachable.
 docker compose up --build -d
 ```
 
-Open **http://localhost:8000**.
+Open **http://localhost:8000**. From another device on your LAN use
+**`http://<windows-host-ip>:8000`** — the port is published on `0.0.0.0` and Windows Defender
+Firewall asks to allow it the first time the container starts.
+
+The image is a two-stage build (~240 MB compressed, ≈975 MB on disk because Debian's FFmpeg pulls a
+large AV/GL library set): Node lives only in the builder stage, and the runtime stage contains
+Python 3.11, FFmpeg, `cifs-utils` and the app. NVENC support comes from the host driver that the
+NVIDIA Container Toolkit injects at runtime, not from a CUDA base image.
 
 The image builds the React frontend and serves it from FastAPI, so there is only one port and one
 process to manage. Useful commands:
@@ -126,6 +125,19 @@ On Compose releases older than v2.30 replace `gpus: all` with the commented bloc
 ```
 
 Equivalently, without Compose: `docker run --gpus all -p 8000:8000 -v D:/:/mnt/host/d fast-frame`.
+
+### CPU-only mode (no NVIDIA driver / toolkit)
+
+Start the stack with the CPU override instead of editing the main file:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.cpu.yml up --build -d
+```
+
+`docker-compose.cpu.yml` clears the GPU device request (`gpus: []`) and the `NVIDIA_*` variables, so
+the container starts on machines without an NVIDIA driver. Renders use `libx264`/`libx265` and
+`/api/system/gpu-check` reports `status: "fallback"` with the reason. Use this file as the base
+compose file (e.g. rename it or pass both `-f` flags) whenever you run without a GPU.
 
 ---
 
@@ -196,6 +208,25 @@ The `Browse files` modal has two tabs: **📁 Host Drives** (the classic zero-co
 - Recent URLs and share bookmarks are kept in LocalStorage for one-click reconnect. Passwords are
   never stored: they live in backend memory only and are never returned by the API.
 
+#### Sharing a folder from Windows 10/11 over the LAN (SMB)
+
+1. Explorer → right-click the folder → **Properties → Sharing → Share…**, add your account (or
+   `Everyone`) and grant *Read* — add *Read/Write* when the folder is the render destination.
+2. Keep the network profile on **Private** and enable *Network discovery* + *File and printer
+   sharing* (Settings → Network & Internet → Advanced network settings → Advanced sharing settings).
+3. In Fast-Frame open `Browse files → 🌐 Network / NAS / URL`, enter `\\HOST\ShareName` (or
+   `\\HOST-IP\ShareName`; `//host/share` also works), add the Windows username/password and press
+   **Connect**. `host.docker.internal` resolves to the Windows host, so
+   `\\host.docker.internal\ShareName` is a reliable fallback when the machine name does not resolve.
+4. SMB2/SMB3 are supported; the legacy SMB1 protocol is not.
+5. To reach the studio from other LAN devices, allow the port once in Windows Defender Firewall:
+
+   ```powershell
+   New-NetFirewallRule -DisplayName "Fast-Frame" -Direction Inbound -Protocol TCP -LocalPort 8000 -Action Allow
+   ```
+
+   then browse `http://<HOST-IP>:8000`.
+
 > The queue lives in memory: restarting the container clears the job list (rendered files stay on
 > disk). Presets and the last destination folder are stored in your browser's LocalStorage.
 
@@ -244,6 +275,7 @@ Details worth knowing:
 | GET | `/api/system/gpu-check?refresh=true` | GPU name/driver, NVENC availability, CPU fallback encoders |
 | GET | `/api/system/config` | Extensions, speed range, font sizes, codecs |
 | GET | `/api/fs/list?path=…` | Directory listing (folders + videos + `.srt`), breadcrumbs |
+| GET | `/api/fs/drives` | Quick drive bar shortcuts (`C:`, `D:`, `Users`, `Media`) |
 | GET | `/api/fs/network-mounts` | Connected SMB/NAS locations + SMB client availability |
 | POST | `/api/fs/network-mount` | Connect a share (`{ path, username?, password?, name? }`) |
 | DELETE | `/api/fs/network-mount/{id}` | Disconnect a share |
@@ -286,9 +318,10 @@ Interactive docs: **http://localhost:8000/docs**.
 
 ## 7. CPU fallback / no GPU
 
-- **No NVIDIA GPU at all** — start with `gpus: all` removed and `NVIDIA_*` variables deleted; the
-  API reports `status: "fallback"` and renders with `libx264`/`libx265`. Expect roughly realtime
-  speed instead of 10–50× realtime.
+- **No NVIDIA GPU at all** — run with the CPU override:
+  `docker compose -f docker-compose.yml -f docker-compose.cpu.yml up --build -d`. The API reports
+  `status: "fallback"` and renders with `libx264`/`libx265`. Expect roughly realtime speed instead
+  of 10–50× realtime.
 - **GPU present but NVENC unavailable** — `/api/system/gpu-check` explains why
   (`message`, `ffmpeg_error`); renders automatically fall back per job.
 - **CPU presets** are `veryfast` with CRF 19 (H.264) / CRF 21 (HEVC) for a good speed/quality trade-off.
@@ -334,8 +367,9 @@ python -m unittest discover -s tests
 | Symptom | Fix |
 | --- | --- |
 | Header shows **CPU Fallback** | Run the `nvidia-smi` container test from §1; ensure `gpus: all` and the Container Toolkit are installed, then restart the container. |
-| Folders are empty | Verify the bind mount target starts with `/mnt/host` and that `HOST_MOUNT_PATH` matches. The breadcrumb root is the container path. |
-| `403 Path is outside of the configured host mount` | The requested path (or a symlink target) is outside the mount; map the real location. |
+| Folders are empty | Verify the bind mount target starts with `/mnt/host` and that `HOST_MOUNT_PATH` matches. On Linux, adjust the Windows drive mounts in `docker-compose.yml` to your `/media` paths. |
+| Drives are missing from the Quick drives bar | Docker Desktop only exposes `/run/desktop/mnt/host` while the WSL2 backend is active; restart Docker Desktop, then `docker compose up -d`. The `/mnt/host/c` fallback mount always shows the `C:` drive. |
+| `403 Path is outside of the configured host mount` | The requested path (or a symlink target) resolves outside the mount and is not inside `/mnt/host/drives` or `/mnt/host/c`; map the real location. |
 | `Permission denied` writing output | On Linux the container runs as root; check the host folder's ownership/SELinux label (`:z` suffix on the volume can help). |
 | Video does not play in the browser | MKV/AVI codecs must be browser-decodable (H.264/AAC works everywhere). The render itself supports any codec FFmpeg decodes. |
 | NVENC job fails, then completes as CPU | Expected: runtime fallback kicked in. See the `fallback_reason` on the job. |
@@ -348,25 +382,29 @@ python -m unittest discover -s tests
 
 ```
 fast-frame/
-├── Dockerfile                 # CUDA 12.2 runtime + FFmpeg + Python 3.11 + Node 20 build
-├── docker-compose.yml         # GPU passthrough + host mounts
+├── Dockerfile                 # 2-stage slim build (Node 20 builder -> Python 3.11 + FFmpeg + NVENC env)
+├── docker-compose.yml         # GPU passthrough + automatic host drive mounts
+├── docker-compose.cpu.yml     # CPU-only override (gpus: []) for machines without NVIDIA drivers
 ├── backend/
 │   ├── main.py                # FastAPI app, WebSocket, static frontend
-│   ├── config.py              # Mount root, extensions, path-traversal defence
+│   ├── config.py              # Mount root, drive shortcuts, path-traversal defence
 │   ├── models.py              # Pydantic job/options models
-│   ├── routers/{filesystem,queue}.py
+│   ├── routers/{filesystem,network,queue}.py
 │   └── services/
 │       ├── ffmpeg_builder.py  # filter_complex + NVENC command builder
 │       ├── ffprobe_service.py # metadata extraction
 │       ├── gpu_service.py     # nvidia-smi + encoder detection
+│       ├── network_service.py # SMB/CIFS + smbprotocol access
 │       └── worker.py          # async queue, FFmpeg runner, progress parser
 ├── frontend/                  # React + Vite + Tailwind studio UI
 │   └── src/components/
 │       ├── CommandBar.jsx     # Configuration toggle, summary pills, destination, render actions
 │       ├── ControlPanel.jsx   # Slide-over configuration drawer with collapsible cards
+│       ├── FileBrowser.jsx    # Host drives (quick drive bar) + network/SMB/URL tabs
+│       ├── NetworkPanel.jsx   # Direct URL & SMB/NAS share connector
 │       ├── VideoWorkspace.jsx # Preview player, rotate/crop toolbar, multi-cut timeline
 │       └── RenderQueue.jsx    # Live progress & batch queue drawer
-└── backend/tests/             # command-builder & queue helper tests
+└── backend/tests/             # command-builder, queue helper, network & host-mount tests
 ```
 
 `DECISIONS.md` records every architectural trade-off made during implementation.

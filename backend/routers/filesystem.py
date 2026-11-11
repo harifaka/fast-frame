@@ -15,7 +15,11 @@ from fastapi.responses import StreamingResponse
 
 from config import (
     PathSecurityError,
+    discover_drive_shortcuts,
     host_root,
+    is_dir_safe,
+    is_file_safe,
+    is_hidden_drive_entry,
     is_network_url,
     is_previewable_url,
     is_subtitle_file,
@@ -46,15 +50,15 @@ def _safe_resolve(raw: str | None, *, must_exist: bool) -> Path:
 
 
 def _entry_for(path: Path) -> dict[str, Any]:
+    is_dir = is_dir_safe(path)
     try:
         stat = path.stat()
-        size_bytes = 0 if path.is_dir() else stat.st_size
+        size_bytes = 0 if is_dir else stat.st_size
         modified = stat.st_mtime
     except OSError:
         size_bytes = 0
         modified = 0.0
 
-    is_dir = path.is_dir()
     if is_dir:
         kind = "directory"
     elif is_video_file(path):
@@ -97,12 +101,13 @@ async def list_directory(
     directory = _safe_resolve(path, must_exist=False)
     if not directory.exists():
         raise HTTPException(status_code=404, detail=f"Directory not found: {directory}")
-    if not directory.is_dir():
+    if not is_dir_safe(directory):
         raise HTTPException(status_code=400, detail="Requested path is not a directory")
 
     try:
         children = sorted(
-            directory.iterdir(), key=lambda p: (not p.is_dir(), p.name.casefold())
+            (child for child in directory.iterdir() if not is_hidden_drive_entry(child)),
+            key=lambda p: (not is_dir_safe(p), p.name.casefold()),
         )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail="Permission denied") from exc
@@ -122,6 +127,14 @@ async def list_directory(
         "entries": entries,
         "truncated": len(children) > MAX_DIRECTORY_ENTRIES,
     }
+
+
+@router.get("/fs/drives")
+async def list_drives() -> dict[str, Any]:
+    """Quick drive bar shortcuts: Windows/Linux drives, Users and Media."""
+
+    root = host_root()
+    return {"root": str(root), "shortcuts": discover_drive_shortcuts()}
 
 
 def _breadcrumbs(directory: Path, root: Path) -> list[dict[str, str]]:
@@ -184,7 +197,7 @@ async def video_metadata(
         # native network paths live on the OS filesystem - fall through.
 
     file_path = _safe_resolve(raw, must_exist=True)
-    if not file_path.is_file():
+    if not is_file_safe(file_path):
         raise HTTPException(status_code=400, detail="Path is not a file")
     if not is_video_file(file_path):
         raise HTTPException(
@@ -494,7 +507,7 @@ async def stream_video_head(
         return StreamingResponse(iter(()), media_type=media_type, headers=headers)
 
     file_path = _safe_resolve(target, must_exist=True)
-    if not file_path.is_file() or not is_video_file(file_path):
+    if not is_file_safe(file_path) or not is_video_file(file_path):
         raise HTTPException(status_code=400, detail="Unsupported video file")
     file_size = file_path.stat().st_size
     headers = _stream_headers(file_path, file_size)
@@ -521,7 +534,7 @@ async def stream_video(
         return await _stream_network_file(request, target)
 
     file_path = _safe_resolve(target, must_exist=True)
-    if not file_path.is_file():
+    if not is_file_safe(file_path):
         raise HTTPException(status_code=400, detail="Path is not a file")
     if not is_video_file(file_path):
         raise HTTPException(status_code=400, detail="Unsupported video file")

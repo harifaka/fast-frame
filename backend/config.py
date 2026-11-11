@@ -48,6 +48,17 @@ def _initial_mount_path() -> Path:
 
 HOST_MOUNT_PATH: Path = _initial_mount_path()
 
+#: Drive-root bind mounts created by ``docker-compose.yml``. Paths inside them
+#: may legitimately resolve outside ``HOST_MOUNT_PATH`` (bind mounts, symlinked
+#: USB drives, Docker Desktop's ``/run/desktop/mnt/host``), so symlink
+#: resolution is allowed to cross that boundary while lexical ``..`` traversal
+#: is still rejected.
+DRIVE_MOUNT_NAMES: tuple[str, ...] = ("drives", "c")
+
+#: Internal WSL system folders that Docker Desktop exposes next to the real
+#: drives. They are never useful for media and are hidden from the browser.
+HIDDEN_DRIVE_ENTRIES: frozenset[str] = frozenset({"wslg", "shm", "wsl"})
+
 
 def host_root() -> Path:
     """Return the (possibly re-resolved) zero-copy mount root."""
@@ -80,10 +91,22 @@ class PathSecurityError(ValueError):
 
 
 def resolve_host_path(raw: str | None, *, must_exist: bool = False) -> Path:
-    """Resolve ``raw`` and guarantee it stays inside :func:`host_root`.
+    """Validate ``raw`` and return its lexically normalised form inside the root.
 
-    Raises :class:`PathSecurityError` for traversal attempts, foreign drives or
-    symlinks that point outside of the mount root.
+    Two checks are performed:
+
+    1. **Lexical containment** - ``..`` segments are collapsed without touching
+       the filesystem, so traversal such as ``/mnt/host/../../etc`` is rejected
+       before anything is read.
+    2. **Symlink / mount containment** - the path is resolved and must stay
+       inside :func:`host_root`. Resolution is allowed to leave the root when
+       the requested path lives in one of the drive bind mounts
+       (:data:`DRIVE_MOUNT_NAMES`) or under an actual mount point, because
+       Docker Desktop and Linux USB drives expose them that way.
+
+    The lexically normalised path is returned (not the resolved one) so entry
+    paths handed back to the browser stay inside ``HOST_MOUNT_PATH`` and remain
+    valid inputs for the next request.
     """
 
     root = host_root()
@@ -94,27 +117,131 @@ def resolve_host_path(raw: str | None, *, must_exist: bool = False) -> Path:
         # ``Path('/abs')`` on Windows anchors to the current drive, which is
         # exactly what we want for the container's POSIX-style paths.
         candidate = Path(raw).expanduser()
+        if not candidate.is_absolute():
+            candidate = root / candidate
 
-    try:
-        resolved_root = root.resolve(strict=False)
-        resolved = candidate.resolve(strict=False)
-    except OSError as exc:  # pragma: no cover - platform specific
-        raise PathSecurityError(f"Invalid path: {raw}") from exc
-
-    if not _is_within(resolved, resolved_root):
+    lexical = Path(os.path.normpath(str(candidate)))
+    if not _is_within(lexical, root):
         raise PathSecurityError("Path is outside of the configured host mount")
 
-    if must_exist and not resolved.exists():
+    try:
+        resolved = candidate.resolve(strict=False)
+    except (OSError, RuntimeError) as exc:  # pragma: no cover - platform specific
+        raise PathSecurityError(f"Invalid path: {raw}") from exc
+
+    if not _is_within(resolved, root) and not _crosses_drive_mount(lexical, root):
+        raise PathSecurityError("Path is outside of the configured host mount")
+
+    if must_exist and not lexical.exists():
         raise PathSecurityError(f"Path does not exist: {raw}")
-    return resolved
+    return lexical
 
 
 def _is_within(candidate: Path, root: Path) -> bool:
     try:
-        return os.path.commonpath([str(candidate), str(root)]) == str(root)
+        candidate_text = os.path.normcase(str(candidate))
+        root_text = os.path.normcase(str(root))
+        return os.path.commonpath([candidate_text, root_text]) == root_text
     except ValueError:
         # Different drives / mixed absolute-relative paths.
         return False
+
+
+def _crosses_drive_mount(lexical: Path, root: Path) -> bool:
+    """True when ``lexical`` is anchored on a drive bind mount inside ``root``."""
+
+    for name in DRIVE_MOUNT_NAMES:
+        if _is_within(lexical, root / name):
+            return True
+
+    # A Linux media mount (``/media``, ``/run/media``) is itself a mount point;
+    # anything below it may resolve to a device path outside the root.
+    current = lexical
+    while current != root:
+        if not _is_within(current, root):
+            return False
+        try:
+            if os.path.ismount(current):
+                return True
+        except OSError:  # pragma: no cover - platform specific
+            return False
+        current = current.parent
+    return False
+
+
+def is_dir_safe(path: Path) -> bool:
+    """``Path.is_dir`` that returns False instead of raising on EACCES."""
+
+    try:
+        return path.is_dir()
+    except OSError:
+        return False
+
+
+def is_file_safe(path: Path) -> bool:
+    """``Path.is_file`` that returns False instead of raising on EACCES."""
+
+    try:
+        return path.is_file()
+    except OSError:
+        return False
+
+
+def is_hidden_drive_entry(path: Path) -> bool:
+    """True for Docker Desktop's internal WSL folders at the drive root."""
+
+    if path.name.casefold() not in HIDDEN_DRIVE_ENTRIES:
+        return False
+    return path.parent == host_root() / DRIVE_MOUNT_NAMES[0]
+
+
+def discover_drive_shortcuts() -> list[dict[str, str]]:
+    """Quick-access drive shortcuts for the file browser's drive bar.
+
+    Exposes ``C:``/``D:``/``E:`` (all Windows drives, including USB) from the
+    ``drives`` bind mount, the direct ``C:`` fallback mount, a ``Users`` shortcut
+    per drive and the always-present ``Media`` folder.
+    """
+
+    root = host_root()
+    shortcuts: list[dict[str, str]] = []
+    labels: set[str] = set()
+
+    def add(name: str, label: str, path: Path, kind: str) -> None:
+        key = label.casefold()
+        if key in labels or not is_dir_safe(path):
+            return
+        labels.add(key)
+        shortcuts.append({"name": name, "label": label, "path": str(path), "kind": kind})
+
+    drives_mount = root / DRIVE_MOUNT_NAMES[0]
+    drive_roots: list[Path] = []
+    if is_dir_safe(drives_mount):
+        try:
+            children = sorted(drives_mount.iterdir(), key=lambda p: p.name.casefold())
+        except OSError:
+            children = []
+        for child in children:
+            if is_hidden_drive_entry(child) or not is_dir_safe(child):
+                continue
+            label = f"{child.name.upper()}:" if len(child.name) <= 3 else child.name
+            add(child.name, label, child, "drive")
+            drive_roots.append(child)
+
+    # Direct fallback mount (``C:/`` bound to ``/mnt/host/c``) when the whole
+    # host root is not available. Skipped when the drive already exists above.
+    for name in DRIVE_MOUNT_NAMES[1:]:
+        direct = root / name
+        add(name, f"{name.upper()}:", direct, "drive")
+        if is_dir_safe(direct):
+            drive_roots.append(direct)
+
+    for drive in drive_roots:
+        add("users", "Users", drive / "Users", "folder")
+        break
+
+    add("media", "Media", root / "media", "media")
+    return shortcuts
 
 
 def is_video_file(path: Path) -> bool:

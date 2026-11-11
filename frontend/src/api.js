@@ -58,6 +58,7 @@ export const api = {
   gpu: (refresh = false) => request(`/api/system/gpu-check${refresh ? '?refresh=true' : ''}`),
   config: () => request('/api/system/config'),
   list: (path) => request(`/api/fs/list${buildQuery({ path })}`),
+  drives: () => request('/api/fs/drives'),
   metadata: (target) =>
     request(`/api/video/metadata${buildQuery(isNetworkUrl(target) ? { url: target } : { path: target })}`),
   streamUrl: (target) =>

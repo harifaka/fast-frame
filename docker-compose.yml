@@ -7,7 +7,8 @@ services:
     container_name: fast-frame
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      # Bind all interfaces so Windows 10/11 LAN devices can reach the studio.
+      - "0.0.0.0:8000:8000"
     environment:
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,video,utility
@@ -17,13 +18,16 @@ services:
       # Loopback base URL used to hand non-mounted NAS files to ffmpeg/ffprobe.
       FASTFRAME_INTERNAL_URL: http://127.0.0.1:8000
     volumes:
+      # Docker Desktop (WSL2): the whole host filesystem, i.e. every Windows
+      # drive (c, d, e) and USB drive, with no .env or compose edit required.
+      - /run/desktop/mnt/host:/mnt/host/drives
+      # Direct fallback access to the main Windows C: drive.
+      - C:/:/mnt/host/c
       # Portable default: anything dropped into ./media shows up under /mnt/host/media.
       - ./media:/mnt/host/media
       # Kernel-level SMB mounts live here; a volume keeps them off your media folders.
       - fast-frame-network:/mnt/host/network
-      # Windows (Docker Desktop + WSL2) - map a whole drive:
-      # - D:/:/mnt/host/d
-      # Linux - map removable / media drives:
+      # Linux hosts: replace the two Windows mounts above with e.g.
       # - /media:/mnt/host/media
       # - /run/media:/mnt/host/run-media
     gpus: all
@@ -42,7 +46,11 @@ services:
     #           capabilities: [gpu, video]
     stop_grace_period: 20s
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/health"]
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=4)
       interval: 30s
       timeout: 5s
       retries: 3

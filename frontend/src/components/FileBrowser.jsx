@@ -2,17 +2,26 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   ArrowUp,
   Check,
+  Clapperboard,
   FileVideo,
   FolderOpen,
   Globe,
   HardDrive,
   Loader2,
   TriangleAlert,
+  Users,
   X,
 } from 'lucide-react'
 import { api } from '../api'
 import FileEntryList from './FileEntryList'
 import NetworkPanel from './NetworkPanel'
+
+const SHORTCUT_ICONS = { drive: HardDrive, media: Clapperboard, folder: Users }
+
+function isWithinPath(path, base) {
+  if (!path || !base) return false
+  return path === base || path.startsWith(base.endsWith('/') ? base : `${base}/`)
+}
 
 function TabButton({ active, onClick, icon: Icon, label }) {
   return (
@@ -48,6 +57,7 @@ export default function FileBrowser({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [selected, setSelected] = useState(null)
+  const [shortcuts, setShortcuts] = useState([])
 
   const isSource = mode === 'source'
 
@@ -72,6 +82,22 @@ export default function FileBrowser({
     const startPath = initialPath || root
     if (startPath) load(startPath)
   }, [open, initialPath, root, load])
+
+  useEffect(() => {
+    if (!open) return undefined
+    let cancelled = false
+    api
+      .drives()
+      .then((response) => {
+        if (!cancelled) setShortcuts(response?.shortcuts || [])
+      })
+      .catch(() => {
+        if (!cancelled) setShortcuts([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open])
 
   useEffect(() => {
     if (!open) return undefined
@@ -155,6 +181,34 @@ export default function FileBrowser({
           <NetworkPanel mode={mode} onSelect={onSelect} videoExtensions={videoExtensions} />
         ) : (
           <>
+            {shortcuts.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5 border-b border-white/5 bg-studio-950/30 px-4 py-2">
+                <span className="mr-1 text-[10px] font-semibold uppercase tracking-wider text-slate-600">
+                  Quick drives
+                </span>
+                {shortcuts.map((shortcut) => {
+                  const Icon = SHORTCUT_ICONS[shortcut.kind] || HardDrive
+                  const active = isWithinPath(currentPath, shortcut.path)
+                  return (
+                    <button
+                      key={shortcut.path}
+                      type="button"
+                      title={shortcut.path}
+                      onClick={() => load(shortcut.path)}
+                      className={`flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium transition ${
+                        active
+                          ? 'border-accent-500/40 bg-accent-500/10 text-accent-300'
+                          : 'border-white/5 bg-white/[0.02] text-slate-400 hover:bg-white/[0.06] hover:text-slate-200'
+                      }`}
+                    >
+                      <Icon className="h-3 w-3" />
+                      {shortcut.label}
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+
             <div className="flex items-center gap-2 border-b border-white/5 bg-studio-950/40 px-4 py-2">
               <button
                 type="button"

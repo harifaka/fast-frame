@@ -1,6 +1,9 @@
 # FAST-FRAME
 ## GPU-Accelerated Video Speed & Processing Studio (Zero-Copy Docker WebApp)
-## Development Roadmap & Specification (for Cursor AI Agent)
+## Development Roadmap & Specification
+
+**Status:** Phases 1–6 are implemented, verified and committed. Phase 7 is the
+current (and final) phase.
 
 ### 1. Project Overview & Core Principles
 The goal is to build a Dockerized, web-based video processing application utilizing NVIDIA RTX 3060 (NVENC) GPU acceleration.
@@ -16,20 +19,37 @@ The goal is to build a Dockerized, web-based video processing application utiliz
 ### 2. Tech Stack
 * **Backend:** Python 3.11 + FastAPI + Uvicorn + WebSockets (`asyncio` subprocess management for FFmpeg jobs).
 * **Frontend:** React (Vite) + TailwindCSS + Lucide Icons (modern, dark-themed "studio" UI).
-* **Video Engine:** FFmpeg (with CUDA / NVENC support) + `ffprobe` (for reading metadata and duration).
-* **Infrastructure:** Docker (based on `nvidia/cuda:12.2.0-runtime-ubuntu22.04`) + `docker-compose.yml` configured with NVIDIA Container Toolkit (`gpus: all`).
+* **Video Engine:** FFmpeg (NVENC via driver injection, `libx264`/`libx265` fallback) + `ffprobe` (metadata, local & URL).
+* **Infrastructure:** Docker, built as a slim multi-stage image — `node:20-alpine` compiles `frontend/dist`,
+  `python:3.11-slim-bookworm` runs the app with FFmpeg + `cifs-utils`. `NVIDIA_VISIBLE_DEVICES` /
+  `NVIDIA_DRIVER_CAPABILITIES` make the NVIDIA Container Toolkit inject the host's NVENC driver
+  (`libnvidia-encode.so`, `nvidia-smi`) into the container, so no ~3 GB CUDA base image is needed.
+  `docker-compose.yml` (`gpus: all`) plus `docker-compose.cpu.yml` for machines without NVIDIA drivers.
 
 ---
 
-### 3. The 6-Phase Iterative Development Plan (Step-by-Step)
+### 3. The 7-Phase Iterative Development Plan (Step-by-Step)
+
+| Phase | Scope | Status |
+| --- | --- | --- |
+| 1 | Docker foundation, GPU passthrough, zero-copy file browser | ✅ Implemented |
+| 2 | GPU speed engine, HEVC toggle, pitch-correct audio | ✅ Implemented |
+| 3 | Multi-cut segments & time-synced subtitle burn-in | ✅ Implemented |
+| 4 | Rotation & interactive crop | ✅ Implemented |
+| 5 | Render queue, presets & fault tolerance | ✅ Implemented |
+| 6 | Focus-mode layout: configuration drawer & always-on render bar | ✅ Implemented |
+| 7 | Auto-mounted host drives, network/SMB sources & slim multi-stage image | 🚧 Current |
+
+Each phase lists the tasks it delivered and its definition of done; completed phases are
+kept as the reference specification for the behaviour that must not regress.
 
 ---
 
-#### 🚀 PHASE 1: Docker Foundation, NVIDIA GPU Passthrough & Zero-Copy File Browser
+#### 🚀 PHASE 1: Docker Foundation, NVIDIA GPU Passthrough & Zero-Copy File Browser ✅
 **Goal:** Enable the container to access the RTX 3060 GPU and the host filesystem (`/mnt/host`), allowing the user to browse source files and target directories via the web UI and preview videos.
 
 **Tasks (Backend & Docker):**
-1. Create `Dockerfile` and `docker-compose.yml`. Install `ffmpeg`, Python environment, and Node.js (for building the frontend) on the Ubuntu-based CUDA image.
+1. Create `Dockerfile` and `docker-compose.yml`. The image is a multi-stage build (see Phase 7): `node:20-alpine` compiles the frontend, `python:3.11-slim-bookworm` installs `ffmpeg` and the Python app; NVENC comes from the host driver injected by the NVIDIA Container Toolkit.
 2. `GET /api/system/gpu-check`: Runs `nvidia-smi` and `ffmpeg -encoders | grep nvenc`, returning the GPU model name (e.g., RTX 3060) and the availability of `h264_nvenc` / `hevc_nvenc`.
 3. `GET /api/fs/list?path=/mnt/host/...`: Lists directories and supported video/subtitle files (`.mp4, .mkv, .avi, .srt`) with file size and modification date. Include path traversal protection.
 4. `GET /api/video/metadata?path=...`: Uses `ffprobe` to return video duration, resolution, FPS, codec, and audio stream details.
@@ -46,7 +66,7 @@ The container starts, the header displays "NVIDIA GeForce RTX 3060 - NVENC Ready
 
 ---
 
-#### ⚡ PHASE 2: GPU Speed Engine, HEVC (H.265) Toggle & Pitch-Correct Audio
+#### ⚡ PHASE 2: GPU Speed Engine, HEVC (H.265) Toggle & Pitch-Correct Audio ✅
 **Goal:** Transcode the selected video directly into the target folder at custom speeds (`0.5x`, `0.75x`, `1.0x`, `1.25x`, `1.5x`, `2.0x`, `3.0x`, or custom slider), with selectable H.264 / H.265 (HEVC) GPU encoding and real-time progress tracking.
 
 **Tasks (Backend):**
@@ -68,7 +88,7 @@ Transcoding a 1080p/4K video at `2.0x` speed with HEVC NVENC outputs a visually 
 
 ---
 
-#### ✂️ PHASE 3: Multi-Cut (Split & Keep Segments) & Time-Synced Subtitle Burn-in
+#### ✂️ PHASE 3: Multi-Cut (Split & Keep Segments) & Time-Synced Subtitle Burn-in ✅
 **Goal:** Allow trimming not just the start and end, but also cutting out unwanted middle sections (defining multiple "Keep" segments), while accurately burning in `1x` `.srt` subtitles onto the cut and speed-adjusted video.
 
 **Tasks (Backend):**
@@ -92,7 +112,7 @@ Selecting 2 separate segments from a video, attaching a `1x` `.srt` subtitle fil
 
 ---
 
-#### 🔄 PHASE 4: Visual Transformations (Rotation & Interactive Crop)
+#### 🔄 PHASE 4: Visual Transformations (Rotation & Interactive Crop) ✅
 **Goal:** Rotate videos recorded in the wrong orientation and crop out unwanted edges using an interactive visual overlay on the video preview.
 
 **Tasks (Backend):**
@@ -110,7 +130,7 @@ Rotating and cropping a region via the mouse overlay in the preview player produ
 
 ---
 
-#### 📦 PHASE 5: Render Queue (Batch Processing), Presets & Fault Tolerance
+#### 📦 PHASE 5: Render Queue (Batch Processing), Presets & Fault Tolerance ✅
 **Goal:** Queue multiple videos (or multiple cuts from a single long video) for unattended sequential GPU rendering, and save favorite configuration presets.
 
 **Tasks (Backend):**
@@ -130,7 +150,7 @@ Queueing 3 different videos with distinct multi-cut, crop, and speed settings pr
 
 ---
 
-#### 🎛️ PHASE 6: Focus Mode Layout — Configuration Drawer & Always-On Render Bar
+#### 🎛️ PHASE 6: Focus Mode Layout — Configuration Drawer & Always-On Render Bar ✅
 **Goal:** Give the preview and multi-cut timeline the whole window and move every configuration card (Presets, Source, Speed, Encoding, Subtitles) into a toggleable drawer that is summoned on demand.
 
 **Tasks (Frontend):**
@@ -145,26 +165,26 @@ The studio opens with the preview spanning the full width of the window, every c
 
 ---
 
-#### 🌐 PHASE 7: Auto-Mounted Host Drives, Network/SMB Sources & Slim Multi-Stage Image
-**Goal:** Automatically expose all Windows/Linux host drives (`C:`, `D:`, USB drives) without manual `.env` or compose edits, support Network URLs & SMB/NAS shares directly in the File Browser modal, and shrink the Docker image from ~3GB to ~400MB while keeping full NVENC GPU acceleration and automatic CPU fallback.
+#### 🌐 PHASE 7: Auto-Mounted Host Drives, Network/SMB Sources & Slim Multi-Stage Image 🚧
+**Goal:** Automatically expose all Windows/Linux host drives (`C:`, `D:`, USB drives) without manual `.env` or compose edits, support Network URLs & SMB/NAS shares directly in the File Browser modal, and shrink the Docker image from ~3 GB to under 1 GB while keeping full NVENC GPU acceleration and automatic CPU fallback.
 
 **Tasks (Docker & Infrastructure):**
-1. **Multi-Stage Slim `Dockerfile` (~400MB with NVENC):**
+1. **Multi-Stage Slim `Dockerfile` (~240 MB compressed, ≈975 MB on disk with NVENC):**
    - Stage 1 (`node:20-alpine`): Build `frontend/dist`.
-   - Stage 2 (`python:3.11-slim-bookworm`): Install only `ffmpeg`, `cifs-utils`, and `ca-certificates`. Set `NVIDIA_VISIBLE_DEVICES=all` and `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility` so the host's NVENC drivers (`libnvidia-encode.so`) and `nvidia-smi` are injected at runtime without needing the 3GB CUDA toolkit image.
+   - Stage 2 (`python:3.11-slim-bookworm`): Install only `ffmpeg`, `cifs-utils`, and `ca-certificates` (`--no-install-recommends`). Set `NVIDIA_VISIBLE_DEVICES=all` and `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility` so the host's NVENC drivers (`libnvidia-encode.so`) and `nvidia-smi` are injected at runtime without needing the 3GB CUDA toolkit image. (Debian's `ffmpeg` pulls a large AV/GL library set; the image is ~240 MB to download, ≈975 MB uncompressed.)
 2. **Zero-Config Host Drive Mounts in `docker-compose.yml`:**
    - Mount `/run/desktop/mnt/host:/mnt/host/drives` (Docker Desktop WSL2 automatic root containing all Windows drives `c`, `d`, `e`, USB drives) and `C:/:/mnt/host/c` alongside `./media:/mnt/host/media` by default so the host machine is immediately browsable out of the box.
    - Bind port `"0.0.0.0:8000:8000"` for instant LAN access on Windows 10/11.
-   - Provide `docker-compose.cpu.yml` (and auto-detection script) so machines without NVIDIA drivers/toolkit installed start cleanly in CPU mode.
+   - Provide `docker-compose.cpu.yml` (`gpus: []`) so machines without NVIDIA drivers/toolkit installed start cleanly in CPU mode.
 
 **Tasks (Backend & Frontend):**
-1. **Quick Drive Bar in `FileBrowser.jsx`:** One-click buttons for detected Windows/Linux drives (`C:`, `D:`, `E:`, `Users/Downloads`, `Media`) and proper symlink/mount-point resolution under `/mnt/host`.
+1. **Quick Drive Bar in `FileBrowser.jsx`:** One-click buttons for detected Windows/Linux drives (`C:`, `D:`, `E:`, …), `Users` and `Media`, with proper symlink/mount-point resolution under `/mnt/host` (WSL system folders hidden).
 2. **Network / NAS / URL Tab in `FileBrowser.jsx`:**
    - Direct Stream URLs (`http://`, `https://`, `rtsp://`, `webdav://`) passed straight to FFmpeg `-i` with `-reconnect 1`.
    - Windows SMB / NAS share connector (`//SERVER/Share` or `//host.docker.internal/Share`) usable as both Source and Destination.
 
 **Phase 7 Definition of Done:**
-Running `docker compose up --build -d` builds a ~400MB image, immediately displays all host Windows drives (`C:`, `D:`, USB) and the `Network / NAS / URL` tab in `Browse files`, and renders via NVENC (or CPU fallback if no GPU is installed).
+Running `docker compose up --build -d` builds the slim image (~240 MB compressed, ≈975 MB on disk), immediately displays all host Windows drives (`C:`, `D:`, USB) and the `Network / NAS / URL` tab in `Browse files`, and renders via NVENC (or CPU fallback if no GPU is installed).
 
 ---
 
@@ -173,26 +193,28 @@ Running `docker compose up --build -d` builds a ~400MB image, immediately displa
 ```text
 fast-frame/
 ├── docker-compose.yml          # GPU passthrough + automatic host drive mounts (/run/desktop/mnt/host & C:/)
-├── docker-compose.cpu.yml      # CPU-only override for machines without NVIDIA toolkit
+├── docker-compose.cpu.yml      # CPU-only override (gpus: []) for machines without NVIDIA toolkit
 ├── Dockerfile                  # Multi-stage slim image (Node 20 builder -> Python 3.11 slim + FFmpeg + NVENC env)
 ├── README.md
 ├── ROADMAP.md
 ├── DECISIONS.md
+├── SUMMARY.md
 ├── backend/
 │   ├── requirements.txt
 │   ├── main.py                 # FastAPI app, WebSocket & static frontend serving
-│   ├── config.py               # Mount paths (/mnt/host), symlink-safe validation & network helpers
+│   ├── config.py               # Mount paths (/mnt/host), symlink-safe validation, drive shortcuts, network helpers
 │   ├── models.py               # Pydantic job & options schemas
 │   ├── routers/
-│   │   ├── filesystem.py       # Auto-discovered host drives, metadata & HTTP 206 video stream endpoints
+│   │   ├── filesystem.py       # Drive listing, metadata, HTTP 206 stream & quick drive endpoints
 │   │   ├── network.py          # SMB/NAS mount & stream relay endpoints
 │   │   └── queue.py            # Render queue & job control API
-│   └── services/
-│       ├── ffmpeg_builder.py   # Filter_complex, NVENC, atempo, multi-cut command builder
-│       ├── ffprobe_service.py  # Video metadata extractor (local & URL)
-│       ├── gpu_service.py      # nvidia-smi & NVENC encoder detection with CPU fallback
-│       ├── network_service.py  # SMB/CIFS & smbprotocol zero-copy handler
-│       └── worker.py           # Async background FFmpeg runner & progress parser
+│   ├── services/
+│   │   ├── ffmpeg_builder.py   # Filter_complex, NVENC, atempo, multi-cut command builder
+│   │   ├── ffprobe_service.py  # Video metadata extractor (local & URL)
+│   │   ├── gpu_service.py      # nvidia-smi & NVENC encoder detection with CPU fallback
+│   │   ├── network_service.py  # SMB/CIFS & smbprotocol zero-copy handler
+│   │   └── worker.py           # Async background FFmpeg runner & progress parser
+│   └── tests/                  # Command builder, queue helper, network & host-mount tests
 └── frontend/
     ├── package.json
     ├── vite.config.js
@@ -202,6 +224,7 @@ fast-frame/
         └── components/
             ├── CommandBar.jsx      # Configuration toggle, summary pills, destination, Render Now / + Add to Queue
             ├── FileBrowser.jsx     # Host Drives (with Quick Drive bar) + Network/SMB/URL modal
+            ├── FileEntryList.jsx   # Shared entry list for the Host Drives and Network tabs
             ├── NetworkPanel.jsx    # Direct URL & Windows/NAS SMB share connection UI
             ├── VideoWorkspace.jsx  # Video player preview, Crop overlay, Multi-Cut timeline
             ├── ControlPanel.jsx    # Slide-over Configuration drawer (Presets, Source, Speed, Encoding, Subtitles)

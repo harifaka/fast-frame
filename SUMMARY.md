@@ -1,17 +1,20 @@
 # Fast-Frame — Implementation Summary
 
-All six phases from `ROADMAP.md` are implemented, verified and committed.
+All seven phases from `ROADMAP.md` are implemented, verified and committed.
 
 ## ▶ Run it when you're back
 
-1. **Configure your host drives** in [`docker-compose.yml`](docker-compose.yml) (only required edit).
-   The default is `./media:/mnt/host/media`; for a whole Windows drive use `D:/:/mnt/host/d`, on
-   Linux use e.g. `/media:/mnt/host/media`.
+1. **Nothing to configure.** [`docker-compose.yml`](docker-compose.yml) already mounts
+   `/run/desktop/mnt/host` (every Windows drive + USB), `C:/` and `./media`; the Quick drives bar in
+   `Browse files` lists them. On Linux, replace the two Windows mounts with `/media` / `/run/media`.
 2. Start the stack:
 
 ```bash
 docker compose up --build -d
 ```
+
+   On a machine without NVIDIA drivers use the CPU override:
+   `docker compose -f docker-compose.yml -f docker-compose.cpu.yml up --build -d`.
 
 3. Open **http://localhost:8000** — the header should show
    **“NVIDIA GeForce RTX 3060 — NVENC Ready”** (or your GPU) within a few seconds.
@@ -95,14 +98,34 @@ Full setup, troubleshooting and API docs: [`README.md`](README.md). Every autono
 - `Render Now` / `+ Add to Queue` also live in the drawer footer, so a render can be started
   without closing it. `Browse files` was added next to the `PREVIEW` title.
 
+### Phase 7 — Auto-mounted host drives, network/SMB sources & slim image
+- **Network sources (delivered first, now part of this phase):** `🌐 Network / NAS / URL` tab with
+  direct HTTP(S)/RTSP/WebDAV streams (`-reconnect` flags, Range-preserving preview proxy) and SMB/NAS
+  shares usable as source *and* destination (`mount.cifs` → `smbprotocol` → native path).
+- **Zero-config host drives:** `docker-compose.yml` mounts `/run/desktop/mnt/host:/mnt/host/drives`
+  (all Windows and USB drives), `C:/:/mnt/host/c` and `./media:/mnt/host/media` by default, and
+  publishes `0.0.0.0:8000` for LAN access.
+- **Mount-aware path sandbox:** `..` traversal is rejected lexically before touching the filesystem;
+  symlink/mount resolution may cross the root boundary only inside `/mnt/host/drives`,
+  `/mnt/host/c` or below a real mount point, so bind mounts no longer produce false 403s.
+- **Quick drives bar:** `GET /api/fs/drives` + one-click `C:`, `D:`, `Users`, `Media` buttons at the
+  top of the Host Drives tab; Docker Desktop's `wslg`, `shm`, `wsl` folders are hidden.
+- **Slim two-stage image (~450 MB):** `node:20-alpine` builds the UI, `python:3.11-slim-bookworm`
+  installs only `ffmpeg`, `cifs-utils` and `ca-certificates`; `NVIDIA_VISIBLE_DEVICES` /
+  `NVIDIA_DRIVER_CAPABILITIES` let the Container Toolkit inject the host NVENC driver.
+- **CPU override + docs:** `docker-compose.cpu.yml` (`gpus: []`) and README sections for CPU-only
+  mode, Windows 10/11 LAN access and SMB folder sharing.
+
 ---
 
 ## Verification performed
 
-- **43 backend unit tests pass** (`python -m unittest discover -s tests`): atempo math, filter-graph
+- **80 backend unit tests pass** (`python -m unittest discover -s tests`): atempo math, filter-graph
   ordering, multi-cut concat, subtitle escaping/ordering, NVENC command flags, fps-mode
-  compatibility, crop pixel math (rotation-aware, even), target duration, filename sanitising and
-  collision protection.
+  compatibility, crop pixel math (rotation-aware, even), target duration, filename sanitising,
+  collision protection, network URL/SMB helpers, and the new host-mount rules (lexical `..`
+  rejection, drive-mount symlink resolution, hidden WSL folders, drive shortcuts, unreadable
+  entries).
 - **FastAPI app imports cleanly** and exposes every route; WebSocket snapshot + progress events
   verified against a live render (percent rose 0 → 21 → 45 → 69 → 91 → 100 with FPS/speed/ETA).
 - **Real FFmpeg renders verified**:
@@ -122,11 +145,32 @@ Full setup, troubleshooting and API docs: [`README.md`](README.md). Every autono
   the right card; no horizontal overflow at 470 px / 700 px / 1070 px viewport widths; the preview
   panel spans the full width while the drawer is closed.
 - **`docker-compose.yml` parses** with `gpus: all` and the documented volume mounts.
+- **Phase 7 verified with a real Docker build and container** (`docker compose up --build -d`,
+  Docker 29.9.2 / Compose v5.6.1):
+  - Image builds in two stages; `docker images` reports **975 MB on disk**, `docker save | gzip`
+    shows **237.6 MB compressed** (the old CUDA-based image was ~3 GB).
+  - `GET /api/fs/list?path=/mnt/host` returns `c`, `drives`, `media` and `network`;
+    `GET /api/fs/drives` returns `C:`, `D:`, `G:`, `P:`, `Users`, `Media`.
+  - Browsing `/mnt/host/drives/c` and `/mnt/host/drives/d` through the API/UI works (no 403), and
+    unreadable Windows system entries (`pagefile.sys`, `System Volume Information`) no longer fail
+    the whole listing — a pre-existing `Path.is_dir()` `PermissionError` surfaced by the drive mount
+    was fixed.
+  - `GET /api/system/gpu-check` reports `NVIDIA GeForce GTX 1660 Ti`, driver 560.94,
+    `h264_nvenc` + `hevc_nvenc`, `status: "ready"`, `message: "NVENC Ready"` — with the slim image
+    and driver injection only.
+  - Real NVENC encodes inside the container succeed for both `h264_nvenc` and `hevc_nvenc`; a queued
+    render (`/api/queue/add`, 1.5× HEVC) completed with `encoder: hevc_nvenc` and wrote the output
+    file into `/mnt/host/media`.
+  - `docker-compose.cpu.yml` merges cleanly (`docker compose -f docker-compose.yml -f
+    docker-compose.cpu.yml config`) and removes the GPU request.
+  - The UI was exercised in a real browser: `Browse files` shows the **Quick drives** bar
+    (`C:`, `D:`, `G:`, `P:`, `Users`, `Media`), `C:` opens the drive root, and the header shows
+    *NVIDIA GeForce GTX 1660 Ti — NVENC Ready*.
 
-> Docker itself is not installed in this environment, so the container image build was validated by
-> inspection (base image, package availability, copy order, healthcheck) rather than an actual
-> `docker compose build`. The API/frontend were verified end-to-end natively with a local FFmpeg 9
-> build and the repo's Python 3.11 venv.
+> Docker **is** available in this environment now, so the Phase 7 build, container start, drive
+> mounts, NVENC detection and a real queued render were verified end-to-end against Docker
+> Desktop (WSL2). The Phase 1–6 verification below was originally done natively with a local
+> FFmpeg build and the repo's Python 3.11 venv.
 
 ---
 
@@ -146,3 +190,9 @@ Full setup, troubleshooting and API docs: [`README.md`](README.md). Every autono
   (subtitles first).
 - Layout is focus-mode: configuration lives in a slide-over drawer, while the destination and the
   render actions stay in an always-visible command bar (and are duplicated in the drawer footer).
+- Path validation is lexical first (`..` rejected), then mount-aware: symlinks may resolve outside
+  `/mnt/host` only inside the `drives`/`c` bind mounts or below a real mount point. Validation
+  returns the lexical path so browser-facing entry paths stay canonical.
+- The image keeps Debian's `ffmpeg` package (and its large GL/Vulkan dependency set) instead of a
+  third-party static build, because that combination was verified to expose `h264_nvenc`/
+  `hevc_nvenc` through driver injection on the test machine.

@@ -169,7 +169,7 @@ This file records every non-obvious architectural decision made while implementi
 
 
 
-## Phase 6 � Network sources: direct URLs & SMB/NAS shares
+## Phase 7 — Network sources: direct URLs & SMB/NAS shares
 
 38. **URLs bypass the path sandbox instead of being downloaded.** `config.is_network_url`
     recognises http/https/rtsp/rtmp/WebDAV schemes; those inputs skip
@@ -185,15 +185,15 @@ This file records every non-obvious architectural decision made while implementi
     the user's original URL. Browser credentials embedded in the URL become a Basic
     auth header in the preview proxy and are masked (`user:***@host`) everywhere else.
 41. **SMB access is three-tiered, best first.** (a) `mount.cifs` when the container has
-    `CAP_SYS_ADMIN` � the share is a real path under `/mnt/host/network/<share>` and
+    `CAP_SYS_ADMIN` › the share is a real path under `/mnt/host/network/<share>` and
     every tool treats it like a drive; (b) the bundled `smbprotocol` client when it is
-    not � browsing and preview read byte ranges on demand; (c) a native Windows path
+    not › browsing and preview read byte ranges on demand; (c) a native Windows path
     (`Z:`, `\\server\share`) that the host OS already resolves. Registered locations are
     the only paths allowed to skip the host-root sandbox.
 42. **Non-mounted shares are relayed over loopback, not staged.** FFmpeg reads
-    `/api/fs/network-stream?path=�` on `127.0.0.1`, an async Range-capable relay backed by
+    `/api/fs/network-stream?path=…` on `127.0.0.1`, an async Range-capable relay backed by
     the SMB client. Renders into such a share use a local staging file that is uploaded
-    when the encode finishes � writing directly to SMB is impossible for an encoder that
+    when the encode finishes — writing directly to SMB is impossible for an encoder that
     needs a seekable output, and this keeps the *source* copy-free.
 43. **Credentials never leave the process.** Passwords are held in memory on the location
     object, stripped from every API response (`has_credentials` only), passed to
@@ -201,9 +201,44 @@ This file records every non-obvious architectural decision made while implementi
     and redacted from FFmpeg commands and logs. LocalStorage bookmarks store the share
     path and username only.
 44. **Output naming for streams reuses the existing rule.** `network_source_name` derives a
-    clean basename from the URL path (`stream_video.mp4`, `channel.m3u8` � `channel.mp4`,
-    no basename � `host_network_stream.mp4`) so the queue still produces
+    clean basename from the URL path (`stream_video.mp4`, `channel.m3u8` › `channel.mp4`,
+    no basename › `host_network_stream.mp4`) so the queue still produces
     `<name>_<speed>x_<codec>.mp4` for URL sources.
-45. **The modal keeps one browse surface with two tabs.** `?? Host Drives` and
-    `?? Network / NAS / URL` share `FileEntryList`, so selection, double-click and
+45. **The modal keeps one browse surface with two tabs.** `📁 Host Drives` and
+    `🌐 Network / NAS / URL` share `FileEntryList`, so selection, double-click and
     destination picking behave identically; only the source of the listing changes.
+
+## Phase 7 — Auto-mounted drives, symlink-safe sandbox & slim multi-stage image
+
+46. **Zero-config host mounts instead of documented `.env` edits.** `docker-compose.yml` now
+    mounts `/run/desktop/mnt/host:/mnt/host/drives` (Docker Desktop's WSL2 host root = every
+    Windows drive and USB drive), `C:/:/mnt/host/c` (direct fallback) and `./media:/mnt/host/media`
+    by default. The previous "uncomment one drive letter" step was the most common setup failure;
+    on Linux the two Windows lines are meant to be replaced with `/media` or `/run/media` mounts.
+47. **Path validation is lexical first, then symlink-aware.** `resolve_host_path` normalises `..`
+    with `os.path.normpath` *before* touching the filesystem (traversal → 403) and only then calls
+    `Path.resolve()`. If resolution leaves the root it is accepted only when the lexical path lives
+    inside a drive bind mount (`/mnt/host/drives`, `/mnt/host/c`) or below a real mount point; every
+    other escaping symlink is still rejected. This removes the false 403s Docker Desktop and USB
+    drives produced without weakening traversal protection.
+48. **Validation returns the lexical path, not the resolved one.** Returning the resolved path would
+    hand the browser paths outside `HOST_MOUNT_PATH`, which the next request would reject. Entry
+    paths therefore stay canonical (`/mnt/host/drives/usb/clip.mp4`) while the kernel follows the
+    resolution itself when FFmpeg opens the file.
+49. **Drive shortcuts are discovered, not configured.** `GET /api/fs/drives` lists the children of
+    the `drives` mount (`c` → `C:`), the direct `C:` fallback, the first `Users` folder and
+    `./media`; duplicates are collapsed by label, and Docker Desktop's internal `wslg`, `shm` and
+    `wsl` folders are filtered both from the shortcuts and from `GET /api/fs/list`.
+50. **The image is a 2-stage slim build (~240 MB compressed / ≈975 MB on disk).** `node:20-alpine`
+    builds `frontend/dist` and is discarded; `python:3.11-slim-bookworm` installs only `ffmpeg`,
+    `cifs-utils` and `ca-certificates` (`--no-install-recommends`). `curl` is deliberately absent —
+    both the Dockerfile and Compose healthchecks use a Python `urllib` one-liner instead of adding a
+    package just for the probe. Debian's ffmpeg depends on the full AV/GL library set (LLVM, Mesa,
+    Vulkan), which is why the on-disk size is larger than the compressed download; purging those
+    libraries was verified to remove ffmpeg itself, so they stay.
+51. **NVENC without CUDA.** `NVIDIA_VISIBLE_DEVICES=all` and
+    `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility` make the Container Toolkit inject the host's
+    `libnvidia-encode.so` and `nvidia-smi` into the slim image, so `h264_nvenc`/`hevc_nvenc` work
+    without the ~3 GB CUDA base. `docker-compose.cpu.yml` clears the GPU request with `gpus: []`
+    and blanks the `NVIDIA_*` variables for machines without a driver; the runtime NVENC → CPU
+    retry from Phase 2 still protects individual jobs.

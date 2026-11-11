@@ -114,7 +114,7 @@ async def _detect() -> dict[str, Any]:
     hardware_encoding_available = bool(h264_nvenc or hevc_nvenc)
 
     if hardware_encoding_available:
-        message = "NVENC ready"
+        message = "NVENC Ready"
     elif gpu["gpu_name"]:
         message = "GPU detected, NVENC encoders unavailable - CPU fallback"
     elif not ffmpeg_available:
