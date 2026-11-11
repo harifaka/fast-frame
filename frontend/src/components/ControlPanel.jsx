@@ -1,5 +1,6 @@
 import {
   AudioLines,
+  Captions,
   Clock,
   Cpu,
   Film,
@@ -7,7 +8,9 @@ import {
   Gauge,
   HardDrive,
   Info,
+  RefreshCw,
   Rocket,
+  Scissors,
   Sparkles,
   Zap,
 } from 'lucide-react'
@@ -15,6 +18,11 @@ import { formatBytes, formatClock, formatSpeed } from '../utils'
 import JobProgress from './JobProgress'
 
 const SPEED_PRESETS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3]
+const FONT_SIZES = [
+  { id: 'small', label: 'Small', value: 16 },
+  { id: 'medium', label: 'Medium', value: 24 },
+  { id: 'large', label: 'Large', value: 32 },
+]
 
 function Stat({ label, value }) {
   return (
@@ -40,6 +48,9 @@ export default function ControlPanel({
   onSubmit,
   submitting,
   canRender,
+  subtitleFiles = [],
+  onRefreshSubtitles,
+  subtitlesLoading = false,
 }) {
   const speed = Number(settings.speed) || 1
   const encoderName =
@@ -47,6 +58,12 @@ export default function ControlPanel({
       ? gpu?.hevc_encoder || 'hevc_nvenc'
       : gpu?.h264_encoder || 'h264_nvenc'
   const hardware = gpu?.hardware_encoding_available
+  const keptDuration = (settings.segments || []).reduce(
+    (sum, segment) => sum + (segment.end - segment.start),
+    0,
+  )
+  const outputDuration =
+    keptDuration > 0 ? keptDuration / speed : ((metadata?.duration || 0) / speed)
 
   return (
     <div className="flex flex-col gap-4">
@@ -296,11 +313,77 @@ export default function ControlPanel({
       <section className="panel">
         <div className="panel-header">
           <div className="panel-title">
+            <Captions className="h-3.5 w-3.5 text-indigo-400" />
+            Subtitles
+          </div>
+          <button
+            type="button"
+            onClick={onRefreshSubtitles}
+            disabled={!sourcePath || subtitlesLoading}
+            className="rounded-md p-1 text-slate-500 transition hover:bg-white/5 hover:text-slate-200 disabled:opacity-30"
+            title="Rescan the source folder for .srt files"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${subtitlesLoading ? 'animate-spin' : ''}`} />
+          </button>
+        </div>
+        <div className="space-y-3 p-4">
+          <select
+            className="field text-xs"
+            value={settings.subtitlePath || ''}
+            onChange={(event) => onChange({ subtitlePath: event.target.value })}
+            disabled={!sourcePath}
+            aria-label="Subtitle file"
+          >
+            <option value="">None — do not burn subtitles</option>
+            {subtitleFiles.map((file) => (
+              <option key={file.path} value={file.path}>
+                {file.name}
+              </option>
+            ))}
+          </select>
+
+          {sourcePath && subtitleFiles.length === 0 && (
+            <p className="text-[10px] leading-relaxed text-slate-600">
+              No .srt files were found next to this video. Drop one into the same folder and press
+              refresh.
+            </p>
+          )}
+
+          <div>
+            <span className="field-label">Font size</span>
+            <div className="segmented">
+              {FONT_SIZES.map((size) => (
+                <button
+                  key={size.id}
+                  type="button"
+                  onClick={() => onChange({ subtitleFontSize: size.value })}
+                  data-active={Number(settings.subtitleFontSize) === size.value}
+                  disabled={!settings.subtitlePath}
+                >
+                  {size.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <p className="flex items-start gap-1.5 text-[10px] leading-relaxed text-slate-600">
+            <Info className="mt-0.5 h-3 w-3 shrink-0" />
+            Subtitles are burned onto the frames at their original 1x timestamps before any cutting
+            or speed change, so they stay millisecond-accurate in the final render.
+          </p>
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-header">
+          <div className="panel-title">
             <Rocket className="h-3.5 w-3.5 text-accent-400" />
             Render
           </div>
           <span className="text-[10px] text-slate-600">
             {formatSpeed(speed)}× · {settings.codec === 'hevc' ? 'HEVC' : 'H.264'}
+            {settings.segments?.length ? ` · ${settings.segments.length} cut` : ''}
+            {settings.subtitlePath ? ' · subs' : ''}
           </span>
         </div>
         <div className="space-y-3 p-4">
@@ -323,14 +406,23 @@ export default function ControlPanel({
           )}
 
           {metadata && (
-            <div className="flex items-center justify-between rounded-lg border border-white/5 bg-white/[0.02] px-2.5 py-1.5 text-[10px] text-slate-500">
-              <span className="inline-flex items-center gap-1">
-                <Clock className="h-3 w-3" />
-                Output length
-              </span>
-              <span className="font-mono text-slate-300">
-                {formatClock(metadata.duration / speed)}
-              </span>
+            <div className="space-y-1 rounded-lg border border-white/5 bg-white/[0.02] px-2.5 py-1.5 text-[10px] text-slate-500">
+              <div className="flex items-center justify-between">
+                <span className="inline-flex items-center gap-1">
+                  <Clock className="h-3 w-3" />
+                  Output length
+                </span>
+                <span className="font-mono text-slate-300">{formatClock(outputDuration)}</span>
+              </div>
+              {settings.segments?.length ? (
+                <div className="flex items-center justify-between">
+                  <span className="inline-flex items-center gap-1">
+                    <Scissors className="h-3 w-3" />
+                    Kept footage
+                  </span>
+                  <span className="font-mono text-slate-300">{formatClock(keptDuration)}</span>
+                </div>
+              ) : null}
             </div>
           )}
         </div>

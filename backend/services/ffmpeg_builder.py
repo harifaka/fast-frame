@@ -53,6 +53,11 @@ class RenderOptions:
     audio_bitrate: str = AUDIO_BITRATE
     # FFmpeg 5+ replaced ``-vsync`` with ``-fps_mode``.
     ffmpeg_major: int = 5
+    # Keep-segments in seconds; empty means "the whole video".
+    segments: list[dict[str, float]] = field(default_factory=list)
+    # Optional 1x subtitle burn-in applied before trimming.
+    subtitle_path: str | None = None
+    subtitle_font_size: int = 24
 
     @property
     def encoder(self) -> str:
@@ -75,6 +80,7 @@ class FilterGraph:
     video_label: str | None = None
     audio_label: str | None = None
     statements: list[str] = field(default_factory=list)
+    timing_changed: bool = False
 
     def __bool__(self) -> bool:
         return bool(self.statements)
@@ -157,28 +163,119 @@ def _video_codec_args(options: RenderOptions) -> list[str]:
     return args
 
 
+def normalize_segments(
+    segments: list[dict[str, float]] | None, source_duration: float = 0.0
+) -> list[dict[str, float]]:
+    """Validate, clamp and order keep-segments by start time."""
+
+    cleaned: list[dict[str, float]] = []
+    for raw in segments or []:
+        try:
+            start = float(raw["start"])
+            end = float(raw["end"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise FFmpegBuildError("Each segment needs numeric start and end values") from exc
+        if start < 0 or end < 0:
+            raise FFmpegBuildError("Segment times cannot be negative")
+        if source_duration > 0:
+            start = min(start, source_duration)
+            end = min(end, source_duration)
+        if end - start <= 1e-6:
+            raise FFmpegBuildError("Segment end must be greater than start")
+        cleaned.append({"start": round(start, 6), "end": round(end, 6)})
+    cleaned.sort(key=lambda segment: segment["start"])
+    return cleaned
+
+
+def escape_subtitle_path(path: str) -> str:
+    """Escape a filesystem path for the ``subtitles`` filter.
+
+    FFmpeg parses filter options twice (filtergraph + filter), so Windows drive
+    letters, commas, brackets and apostrophes all need backslash escapes. Paths
+    are normalised to forward slashes first.
+    """
+
+    text = str(path).replace("\\", "/")
+    for char in ("'", ":", ",", ";", "[", "]", "="):
+        text = text.replace(char, f"\\{char}")
+    return text
+
+
+def build_subtitle_filter(options: RenderOptions) -> str | None:
+    if not options.subtitle_path:
+        return None
+    font_size = int(options.subtitle_font_size or 24)
+    escaped = escape_subtitle_path(options.subtitle_path)
+    return (
+        f"subtitles=filename='{escaped}'"
+        f":force_style='FontSize={font_size},Outline=1,Shadow=0'"
+    )
+
+
 def build_filter_graph(options: RenderOptions) -> FilterGraph:
-    """Create the video/audio filter graph for the requested transforms."""
+    """Create the video/audio filter graph for the requested transforms.
+
+    Order: subtitles (1x) -> trim/concat (keep segments) -> rotate/flip ->
+    crop -> speed. Subtitles are burned before trimming so they stay synced to
+    the original timeline no matter which parts are kept or how fast they play.
+    """
 
     speed = validate_speed(options.speed)
     statements: list[str] = []
     video_label = "0:v:0"
-    audio_label = "0:a:0" if options.has_audio else None
-    needs_reencode = abs(speed - 1.0) > _EPSILON
+    audio_pad: str | None = None
+    timing_changed = False
 
-    if needs_reencode:
+    subtitle_filter = build_subtitle_filter(options)
+    if subtitle_filter:
+        statements.append(f"[{video_label}]{subtitle_filter}[v_sub]")
+        video_label = "v_sub"
+
+    segments = normalize_segments(options.segments, options.source_duration)
+    if segments:
+        count = len(segments)
+        for index, segment in enumerate(segments):
+            start = _format_number(segment["start"])
+            end = _format_number(segment["end"])
+            statements.append(
+                f"[{video_label}]trim=start={start}:end={end},"
+                f"setpts=PTS-STARTPTS[v{index}]"
+            )
+            if options.has_audio:
+                statements.append(
+                    f"[0:a:0]atrim=start={start}:end={end},"
+                    f"asetpts=PTS-STARTPTS[a{index}]"
+                )
+        if count == 1:
+            video_label = "v0"
+            audio_pad = "a0" if options.has_audio else None
+        elif options.has_audio:
+            inputs = "".join(f"[v{index}][a{index}]" for index in range(count))
+            statements.append(f"{inputs}concat=n={count}:v=1:a=1[v_cat][a_cat]")
+            video_label = "v_cat"
+            audio_pad = "a_cat"
+        else:
+            inputs = "".join(f"[v{index}]" for index in range(count))
+            statements.append(f"{inputs}concat=n={count}:v=1:a=0[v_cat]")
+            video_label = "v_cat"
+        timing_changed = True
+
+    if abs(speed - 1.0) > _EPSILON:
         statements.append(f"[{video_label}]setpts=PTS/{_format_number(speed)}[v_speed]")
         video_label = "v_speed"
-        if audio_label:
+        timing_changed = True
+        if options.has_audio:
             chain = build_atempo_chain(speed)
-            statements.append(f"[{audio_label}]{chain}[a_speed]")
-            audio_label = "a_speed"
+            audio_source = f"[{audio_pad}]" if audio_pad else "[0:a:0]"
+            statements.append(f"{audio_source}{chain}[a_speed]")
+            audio_pad = "a_speed"
 
     return FilterGraph(
         filter_complex=";".join(statements),
         video_label=video_label if statements else None,
-        audio_label=audio_label if statements else None,
+        audio_label=audio_pad,
         statements=statements,
+        timing_changed=timing_changed,
     )
 
 
@@ -210,8 +307,11 @@ def build_ffmpeg_command(options: RenderOptions) -> list[str]:
     if graph:
         command += ["-filter_complex", graph.filter_complex]
         command += ["-map", f"[{graph.video_label}]"]
-        if options.has_audio and graph.audio_label:
-            command += ["-map", f"[{graph.audio_label}]"]
+        if options.has_audio:
+            if graph.audio_label:
+                command += ["-map", f"[{graph.audio_label}]"]
+            else:
+                command += ["-map", "0:a:0"]
     else:
         command += ["-map", "0:v:0"]
         if options.has_audio:
@@ -224,9 +324,9 @@ def build_ffmpeg_command(options: RenderOptions) -> list[str]:
     else:
         command += ["-an"]
 
-    if abs(speed - 1.0) > _EPSILON:
-        # Keep the exact timestamps produced by setpts instead of resampling to
-        # the nominal frame rate (which would silently drop frames on 2×+).
+    if graph.timing_changed:
+        # Keep the exact timestamps produced by setpts/trim instead of resampling
+        # to the nominal frame rate (which would silently drop frames on 2×+).
         if options.ffmpeg_major >= 5:
             command += ["-fps_mode", "passthrough"]
         else:
@@ -243,9 +343,13 @@ def build_ffmpeg_command(options: RenderOptions) -> list[str]:
 def target_duration(options: RenderOptions) -> float:
     """Duration of the rendered output in seconds (used for progress/ETA)."""
 
-    source_duration = max(0.0, float(options.source_duration or 0.0))
     speed = validate_speed(options.speed)
-    return source_duration / speed if speed else source_duration
+    segments = normalize_segments(options.segments, options.source_duration)
+    if segments:
+        total = sum(segment["end"] - segment["start"] for segment in segments)
+    else:
+        total = max(0.0, float(options.source_duration or 0.0))
+    return total / speed if speed else total
 
 
 def describe_encoder(encoder: str) -> str:

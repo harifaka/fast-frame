@@ -69,3 +69,30 @@ This file records every non-obvious architectural decision made while implementi
     speed instantly; browsers do not pitch-correct below 0.5×/above 2×, so the
     rendered file (atempo chain) is the authoritative result.
 
+## Phase 3 — Multi-cut segments & time-synced subtitle burn-in
+
+18. **Subtitles are burned on the raw 1x timeline first.** The filter graph starts
+    with `[0:v:0]subtitles=…[v_sub]`, and every `trim` reads from `v_sub`. Verified
+    end-to-end: a 1–2 s subtitle still lands on the correct frame after cutting
+    1–2 s + 3–4 s and speeding up 1.5×, and is absent afterwards.
+19. **Filter paths are escaped for FFmpeg's double parsing.** Backslashes are
+    normalised to `/`, then `' : , ; [ ] =` are backslash-escaped and the whole path
+    is single-quoted. Validated with a real Windows path (`C\:/…`) because drive
+    letters are the most common breakage.
+20. **Keep segments are clamped, validated and sorted server-side.** Ends beyond the
+    source duration are clamped, segments shorter than ~0µs are rejected, and
+    ordering is normalised so the UI can never produce an invalid concat graph.
+    Overlapping segments are allowed (deliberate replays) and duplicate footage.
+21. **Single-segment renders skip `concat`.** `concat=n=1` is avoided; the trimmed
+    pads are mapped directly. This keeps the graph smaller and avoids a known
+    concat filter quirk with a single input.
+22. **`force_style` always sets `Outline=1,Shadow=0`.** Burned text stays legible on
+    bright footage without user configuration; only the font size is exposed.
+23. **Subtitle auto-detection is a filename stem match.** On source selection the
+    folder is listed and `<video-stem>.srt` (case-insensitive) is pre-selected;
+    users can still pick any other `.srt` from the dropdown.
+24. **Timeline in/out markers are ephemeral UI state.** Only committed keep
+    segments are stored in settings (and later in presets); uncommitted markers do
+    not leak into renders or saved presets.
+
+

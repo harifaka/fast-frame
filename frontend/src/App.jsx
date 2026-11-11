@@ -6,6 +6,7 @@ import Header from './components/Header'
 import FileBrowser from './components/FileBrowser'
 import VideoWorkspace from './components/VideoWorkspace'
 import ControlPanel from './components/ControlPanel'
+import Timeline from './components/Timeline'
 
 const DEFAULT_SETTINGS = {
   speed: 1,
@@ -46,6 +47,8 @@ export default function App() {
   const [jobs, setJobs] = useState([])
   const [wsStatus, setWsStatus] = useState('connecting')
   const [submitting, setSubmitting] = useState(false)
+  const [subtitleFiles, setSubtitleFiles] = useState([])
+  const [subtitlesLoading, setSubtitlesLoading] = useState(false)
 
   const updateSettings = useCallback(
     (patch) => {
@@ -137,31 +140,86 @@ export default function App() {
     return openProgressSocket(handleProgressEvent, setWsStatus)
   }, [handleProgressEvent])
 
-  const selectSource = useCallback(async (path) => {
-    setBrowser(null)
-    setMetadataLoading(true)
-    setNotice(null)
-    try {
-      const meta = await api.metadata(path)
-      setSourcePath(path)
-      setMetadata(meta)
-      setCurrentTime(0)
-      setSettings((previous) => ({
-        ...previous,
-        rotation: 'none',
-        flipHorizontal: false,
-        segments: [],
-        subtitlePath: '',
-        crop: null,
-        filenameCustom: false,
-        outputFilename: suggestOutputName(meta.name, previous.speed, previous.codec),
-      }))
-      setTargetDir((previous) => previous || dirname(path))
-    } catch (error) {
-      setNotice({ type: 'error', message: error.message })
-    } finally {
-      setMetadataLoading(false)
+  const loadSubtitles = useCallback(async (videoPath) => {
+    if (!videoPath) {
+      setSubtitleFiles([])
+      return []
     }
+    setSubtitlesLoading(true)
+    try {
+      const listing = await api.list(dirname(videoPath))
+      const files = (listing.entries || []).filter((entry) => entry.kind === 'subtitle')
+      setSubtitleFiles(files)
+      return files
+    } catch {
+      setSubtitleFiles([])
+      return []
+    } finally {
+      setSubtitlesLoading(false)
+    }
+  }, [])
+
+  const selectSource = useCallback(
+    async (path) => {
+      setBrowser(null)
+      setMetadataLoading(true)
+      setNotice(null)
+      try {
+        const meta = await api.metadata(path)
+        const files = await loadSubtitles(path)
+        const stem = meta.name.replace(/\.[^.]+$/, '').toLowerCase()
+        const match =
+          files.find((file) => file.name.toLowerCase() === `${stem}.srt`) ||
+          files.find((file) => file.name.toLowerCase().startsWith(stem))
+
+        setSourcePath(path)
+        setMetadata(meta)
+        setCurrentTime(0)
+        setSettings((previous) => ({
+          ...previous,
+          rotation: 'none',
+          flipHorizontal: false,
+          segments: [],
+          subtitlePath: match ? match.path : '',
+          crop: null,
+          filenameCustom: false,
+          outputFilename: suggestOutputName(meta.name, previous.speed, previous.codec),
+        }))
+        setTargetDir((previous) => previous || dirname(path))
+      } catch (error) {
+        setNotice({ type: 'error', message: error.message })
+      } finally {
+        setMetadataLoading(false)
+      }
+    },
+    [loadSubtitles],
+  )
+
+  const addSegment = useCallback((segment) => {
+    setSettings((previous) => ({
+      ...previous,
+      segments: [...previous.segments, segment].sort((a, b) => a.start - b.start),
+    }))
+  }, [])
+
+  const removeSegment = useCallback((index) => {
+    setSettings((previous) => ({
+      ...previous,
+      segments: previous.segments.filter((_, position) => position !== index),
+    }))
+  }, [])
+
+  const clearSegments = useCallback(() => {
+    setSettings((previous) => ({ ...previous, segments: [] }))
+  }, [])
+
+  const seekTo = useCallback((time) => {
+    if (!videoRef.current) {
+      setCurrentTime(time)
+      return
+    }
+    videoRef.current.currentTime = time
+    setCurrentTime(time)
   }, [])
 
   const submitRender = useCallback(
@@ -286,7 +344,19 @@ export default function App() {
             onTimeUpdate={setCurrentTime}
             currentTime={currentTime}
             videoRef={videoRef}
-          />
+          >
+            <Timeline
+              duration={metadata?.duration || 0}
+              currentTime={currentTime}
+              segments={settings.segments}
+              speed={settings.speed}
+              disabled={!sourcePath}
+              onSeek={seekTo}
+              onAddSegment={addSegment}
+              onRemoveSegment={removeSegment}
+              onClearSegments={clearSegments}
+            />
+          </VideoWorkspace>
         </div>
 
         <aside className="flex w-full shrink-0 flex-col gap-4 xl:w-[400px]">
@@ -306,6 +376,9 @@ export default function App() {
             onSubmit={submitRender}
             submitting={submitting}
             canRender={Boolean(sourcePath && targetDir && metadata)}
+            subtitleFiles={subtitleFiles}
+            onRefreshSubtitles={() => loadSubtitles(sourcePath)}
+            subtitlesLoading={subtitlesLoading}
           />
         </aside>
       </main>

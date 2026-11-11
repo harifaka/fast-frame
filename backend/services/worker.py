@@ -16,6 +16,7 @@ from typing import Any
 from config import (
     MAX_STDERR_BYTES,
     PathSecurityError,
+    is_subtitle_file,
     is_video_file,
     normalize_output_extension,
     resolve_host_path,
@@ -211,6 +212,18 @@ class JobManager:
         options["speed"] = speed
         options["output_container"] = output_path.suffix.lower()
 
+        subtitle_path = options.get("subtitle_path")
+        if subtitle_path:
+            try:
+                subtitle = resolve_host_path(subtitle_path, must_exist=True)
+            except PathSecurityError as exc:
+                raise JobValidationError(str(exc)) from exc
+            if not subtitle.is_file() or not is_subtitle_file(subtitle):
+                raise JobValidationError("Subtitle must be an existing .srt file inside the mount")
+            options["subtitle_path"] = str(subtitle)
+        else:
+            options["subtitle_path"] = None
+
         job_id = uuid.uuid4().hex[:12]
         job: dict[str, Any] = {
             "id": job_id,
@@ -244,6 +257,7 @@ class JobManager:
                     output_path=str(output_path),
                     speed=speed,
                     source_duration=metadata["duration"],
+                    segments=options.get("segments") or [],
                 )
             ),
             "progress": {
@@ -378,6 +392,9 @@ class JobManager:
                 h264_encoder=h264_encoder,
                 hevc_encoder=hevc_encoder,
                 ffmpeg_major=job["ffmpeg_major"] or 5,
+                segments=options.get("segments") or [],
+                subtitle_path=options.get("subtitle_path"),
+                subtitle_font_size=int(options.get("subtitle_font_size") or 24),
             )
             return ffmpeg_builder.build_ffmpeg_command(render_options)
 
