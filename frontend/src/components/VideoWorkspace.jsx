@@ -2,7 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AudioLines,
   Crop,
+  Crosshair,
   Expand,
+  Eye,
+  EyeOff,
   FileVideo,
   FlipHorizontal2,
   FolderOpen,
@@ -17,6 +20,7 @@ import {
   RotateCw,
   SkipBack,
   SkipForward,
+  Sparkles,
   Square,
   Undo2,
   Volume2,
@@ -108,6 +112,7 @@ export default function VideoWorkspace({
   onTimeUpdate,
   currentTime,
   videoRef,
+  aiView,
   children,
 }) {
   const containerRef = useRef(null)
@@ -121,6 +126,7 @@ export default function VideoWorkspace({
   const [muted, setMuted] = useState(false)
   const [videoError, setVideoError] = useState(null)
   const [cropAspect, setCropAspect] = useState('free')
+  const [showAiView, setShowAiView] = useState(true)
 
   const srcW = Number(metadata?.width) || 0
   const srcH = Number(metadata?.height) || 0
@@ -130,6 +136,23 @@ export default function VideoWorkspace({
   const orientedH = swapped ? srcW : srcH
   const aspect = orientedW > 0 && orientedH > 0 ? orientedW / orientedH : 16 / 9
   const rotationDegrees = ROTATION_DEGREES[rotation] ?? 0
+
+  const spherical = metadata?.spherical || null
+  const isSpherical = Boolean(spherical)
+  const isStill = Boolean(spherical?.is_still)
+  const aiActive = Boolean(aiView?.active)
+  const aiPan = Number(aiView?.pan) || 0
+  const aiTilt = Number(aiView?.tilt) || 0
+  const aiZoom = clamp(Number(aiView?.zoom) || 1, 0.5, 8)
+  const aiFov = clamp(Number(aiView?.fov) || 90, 20, 140)
+
+  const aiFrustum = useMemo(() => {
+    const widthPct = clamp((aiFov / 180) * 100 / aiZoom, 10, 96)
+    const heightPct = clamp(widthPct * 0.55, 10, 96)
+    const left = clamp(50 + (aiPan / 180) * 50 - widthPct / 2, 0, 100 - widthPct)
+    const top = clamp(50 - (aiTilt / 90) * 50 - heightPct / 2, 0, 100 - heightPct)
+    return { widthPct, heightPct, left, top }
+  }, [aiFov, aiZoom, aiPan, aiTilt])
 
   useEffect(() => {
     const element = containerRef.current
@@ -155,6 +178,7 @@ export default function VideoWorkspace({
     setPlaying(false)
     setDuration(0)
     setVideoError(null)
+    setShowAiView(true)
   }, [sourcePath])
 
   useEffect(() => {
@@ -366,6 +390,33 @@ export default function VideoWorkspace({
               Network
             </span>
           )}
+          {isSpherical && (
+            <span
+              className="chip border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-300"
+              title={`${spherical?.projection} · ${spherical?.container} · ${spherical?.stereo}`}
+            >
+              <Globe className="h-3 w-3" />
+              360° {spherical?.projection === 'dual_fisheye' ? 'Dual fisheye' : 'Equirect'}
+            </span>
+          )}
+          {isSpherical && (
+            <button
+              type="button"
+              onClick={() => setShowAiView((value) => !value)}
+              data-active={showAiView}
+              className="chip border-accent-500/30 bg-accent-500/10 text-accent-300 transition hover:border-accent-500/50"
+              title={showAiView ? 'Hide the neutral AI framing overlay' : 'Show the neutral AI framing overlay'}
+            >
+              {showAiView ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
+              AI view
+            </button>
+          )}
+          {aiActive && (
+            <span className="chip border-emerald-500/30 bg-emerald-500/10 text-emerald-300">
+              <Crosshair className="h-3 w-3" />
+              AI {aiView?.tracking_mode || 'manual'} {aiView?.controller === 'mcp' ? '· MCP' : ''}
+            </span>
+          )}
           {metadata && (
             <>
               <span className="chip">
@@ -429,30 +480,90 @@ export default function VideoWorkspace({
             className="relative overflow-hidden rounded-lg bg-black shadow-2xl ring-1 ring-white/10"
             style={{ width: box.width || '100%', height: box.height || '60%' }}
           >
-            <video
-              ref={videoRef}
-              key={sourcePath}
-              src={api.streamUrl(sourcePath)}
-              className="absolute left-1/2 top-1/2 bg-black"
-              style={{ ...videoSizeStyle, transform: videoTransform, objectFit: 'fill' }}
-              playsInline
-              preload="metadata"
-              onPlay={() => setPlaying(true)}
-              onPause={() => setPlaying(false)}
-              onLoadedMetadata={(event) => {
-                setDuration(event.currentTarget.duration || 0)
-                event.currentTarget.playbackRate = Math.min(
-                  4,
-                  Math.max(0.0625, Number(settings?.speed) || 1),
-                )
-              }}
-              onTimeUpdate={(event) => onTimeUpdate?.(event.currentTarget.currentTime)}
-              onSeeked={(event) => onTimeUpdate?.(event.currentTarget.currentTime)}
-              onError={() =>
-                setVideoError('This file could not be streamed (unsupported codec or path).')
-              }
-              onClick={togglePlay}
-            />
+            {isStill ? (
+              <img
+                key={sourcePath}
+                src={api.streamUrl(sourcePath)}
+                alt={metadata?.name || 'Spherical still'}
+                className="absolute inset-0 h-full w-full bg-black object-contain"
+                style={{
+                  transform: `${settings?.flipHorizontal ? 'scaleX(-1) ' : ''}rotate(${rotationDegrees}deg)`,
+                }}
+                onError={() => setVideoError('The spherical still could not be decoded by this browser.')}
+                onClick={togglePlay}
+              />
+            ) : (
+              <video
+                ref={videoRef}
+                key={sourcePath}
+                src={api.streamUrl(sourcePath)}
+                className="absolute left-1/2 top-1/2 bg-black"
+                style={{ ...videoSizeStyle, transform: videoTransform, objectFit: 'fill' }}
+                playsInline
+                preload="metadata"
+                onPlay={() => setPlaying(true)}
+                onPause={() => setPlaying(false)}
+                onLoadedMetadata={(event) => {
+                  setDuration(event.currentTarget.duration || 0)
+                  event.currentTarget.playbackRate = Math.min(
+                    4,
+                    Math.max(0.0625, Number(settings?.speed) || 1),
+                  )
+                }}
+                onTimeUpdate={(event) => onTimeUpdate?.(event.currentTarget.currentTime)}
+                onSeeked={(event) => onTimeUpdate?.(event.currentTarget.currentTime)}
+                onError={() =>
+                  setVideoError('This file could not be streamed (unsupported codec or path).')
+                }
+                onClick={togglePlay}
+              />
+            )}
+
+            {isSpherical && showAiView && (
+              <div
+                className="pointer-events-none absolute inset-0"
+                aria-label="Neutral AI framing viewport"
+                data-active={aiActive}
+              >
+                <div className="absolute inset-0 bg-[linear-gradient(rgba(148,163,184,0.10)_1px,transparent_1px),linear-gradient(90deg,rgba(148,163,184,0.10)_1px,transparent_1px)] bg-[size:10%_20%] opacity-70" />
+                <div
+                  className={`absolute border ${
+                    aiActive
+                      ? 'border-emerald-400/90 shadow-[0_0_0_1px_rgba(52,211,153,0.25),0_0_28px_rgba(52,211,153,0.18)]'
+                      : 'border-accent-400/70'
+                  }`}
+                  style={{
+                    left: `${aiFrustum.left}%`,
+                    top: `${aiFrustum.top}%`,
+                    width: `${aiFrustum.widthPct}%`,
+                    height: `${aiFrustum.heightPct}%`,
+                  }}
+                >
+                  <span
+                    className={`absolute -top-5 left-0 rounded px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider ${
+                      aiActive ? 'bg-emerald-500/90 text-slate-950' : 'bg-black/70 text-accent-200'
+                    }`}
+                  >
+                    AI view {aiFov.toFixed(0)}° · {aiZoom.toFixed(1)}×
+                  </span>
+                  <Crosshair className="absolute left-1/2 top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 text-white/60" />
+                  {['-left-1 -top-1', '-right-1 -top-1', '-bottom-1 -left-1', '-bottom-1 -right-1'].map(
+                    (position) => (
+                      <span
+                        key={position}
+                        className={`absolute h-2 w-2 ${position} ${
+                          aiActive ? 'bg-emerald-400' : 'bg-accent-400'
+                        }`}
+                      />
+                    ),
+                  )}
+                </div>
+                <span className="absolute bottom-2 left-2 flex items-center gap-1.5 rounded bg-black/70 px-2 py-1 font-mono text-[9px] uppercase tracking-wider text-slate-300">
+                  <Sparkles className="h-3 w-3 text-accent-300" />
+                  Neutral rectilinear preview · pan {aiPan.toFixed(0)}° / tilt {aiTilt.toFixed(0)}°
+                </span>
+              </div>
+            )}
 
             {crop && (
               <div

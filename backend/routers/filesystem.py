@@ -15,6 +15,7 @@ from fastapi.responses import StreamingResponse
 
 from config import (
     PathSecurityError,
+    SUPPORTED_INPUT_LABEL,
     discover_drive_shortcuts,
     host_root,
     is_dir_safe,
@@ -22,6 +23,7 @@ from config import (
     is_hidden_drive_entry,
     is_network_url,
     is_previewable_url,
+    is_spherical_file,
     is_subtitle_file,
     is_video_file,
     mask_credentials,
@@ -29,7 +31,7 @@ from config import (
     relative_to_root,
     resolve_host_path,
 )
-from services import network_service
+from services import insp_service, network_service
 from services.ffprobe_service import ProbeError, probe_video
 from services.network_service import NetworkSourceError
 
@@ -74,6 +76,7 @@ def _entry_for(path: Path) -> dict[str, Any]:
         "relative_path": relative_to_root(path),
         "is_dir": is_dir,
         "kind": kind,
+        "spherical": False if is_dir else is_spherical_file(path),
         "extension": "" if is_dir else path.suffix.lower(),
         "size_bytes": size_bytes,
         "modified": modified,
@@ -181,7 +184,7 @@ async def video_metadata(
             if not is_video_file(Path(name)):
                 raise HTTPException(
                     status_code=400,
-                    detail="Unsupported video format. Supported: .mp4, .mkv, .avi",
+                    detail=f"Unsupported video format. Supported: {SUPPORTED_INPUT_LABEL}",
                 )
             try:
                 metadata = await probe_video(network_service.stream_url_for_path(raw), display_name=name)
@@ -202,8 +205,14 @@ async def video_metadata(
     if not is_video_file(file_path):
         raise HTTPException(
             status_code=400,
-            detail="Unsupported video format. Supported: .mp4, .mkv, .avi",
+            detail=f"Unsupported video format. Supported: {SUPPORTED_INPUT_LABEL}",
         )
+    if is_spherical_file(file_path):
+        inspection = await insp_service.inspect_spherical(file_path)
+        metadata = inspection["metadata"]
+        if inspection.get("probe_error") and metadata.get("spherical", {}).get("container") == "unknown":
+            raise HTTPException(status_code=422, detail=inspection["probe_error"])
+        return metadata
     try:
         return await probe_video(file_path)
     except ProbeError as exc:
@@ -258,11 +267,16 @@ def _parse_range(range_header: str, file_size: int) -> tuple[int, int] | None:
 
 
 def _media_type(path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix == ".insp":
+        return "image/jpeg"
+    if suffix == ".insv":
+        return "video/mp4"
     guessed, _ = mimetypes.guess_type(path.name)
     if guessed:
-        if path.suffix.lower() == ".mkv":
+        if suffix == ".mkv":
             return "video/x-matroska"
-        if path.suffix.lower() == ".avi":
+        if suffix == ".avi":
             return "video/x-msvideo"
         return guessed
     return "application/octet-stream"

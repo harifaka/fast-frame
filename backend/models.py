@@ -77,3 +77,56 @@ class NetworkMountRequest(BaseModel):
     username: str | None = None
     password: str | None = None
     name: str | None = Field(default=None, description="Display name for the mount")
+
+
+TrackingMode = Literal["off", "manual", "subject", "face", "object"]
+
+
+class AiKeyframe(BaseModel):
+    """A framing offset applied at a timestamp of the spherical source."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    time: float = Field(ge=0, description="Offset in seconds from the clip start")
+    pan: float = Field(default=0.0, ge=-180, le=180)
+    tilt: float = Field(default=0.0, ge=-90, le=90)
+    zoom: float = Field(default=1.0, ge=0.5, le=8.0)
+
+
+class AiViewStateUpdate(BaseModel):
+    """Partial framing update; omitted fields keep their current value."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    active: bool | None = None
+    pan: float | None = Field(default=None, ge=-180, le=180)
+    tilt: float | None = Field(default=None, ge=-90, le=90)
+    roll: float | None = Field(default=None, ge=-45, le=45)
+    zoom: float | None = Field(default=None, ge=0.5, le=8.0)
+    fov: float | None = Field(default=None, ge=20, le=140)
+    tracking_mode: TrackingMode | None = None
+    target: str | None = Field(default=None, max_length=120)
+    keyframe_offsets: list[AiKeyframe] | None = None
+    source_path: str | None = None
+    controller: Literal["ui", "mcp"] | None = None
+
+
+class AiMcpCommand(BaseModel):
+    """Envelope an external MCP agent uses to steer the mock view selector."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal[
+        "set_view",
+        "set_tracking",
+        "add_keyframe",
+        "clear_keyframes",
+        "activate",
+        "deactivate",
+        "reset",
+    ]
+    view: AiViewStateUpdate | None = None
+    keyframe: AiKeyframe | None = None
+    tracking_mode: TrackingMode | None = None
+    target: str | None = Field(default=None, max_length=120)
+    source_path: str | None = None

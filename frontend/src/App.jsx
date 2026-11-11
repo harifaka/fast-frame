@@ -54,6 +54,9 @@ export default function App() {
   const [queueOpen, setQueueOpen] = useState(false)
   const [configOpen, setConfigOpen] = useState(false)
   const [configRequest, setConfigRequest] = useState(null)
+  const [aiView, setAiView] = useState(null)
+  const [aiViewSaving, setAiViewSaving] = useState(false)
+  const [aiViewError, setAiViewError] = useState(null)
 
   const openConfig = useCallback((section = null) => {
     setQueueOpen(false)
@@ -78,6 +81,73 @@ export default function App() {
     [metadata],
   )
 
+  const aiViewBusyRef = useRef(false)
+
+  const refreshAiView = useCallback(async (force = false) => {
+    if (aiViewBusyRef.current && !force) return null
+    try {
+      const state = await api.aiViewState()
+      setAiView(state)
+      setAiViewError(null)
+      return state
+    } catch (error) {
+      setAiViewError(error.message)
+      return null
+    }
+  }, [])
+
+  const updateAiView = useCallback(async (patch) => {
+    if (!patch) return null
+    aiViewBusyRef.current = true
+    setAiViewSaving(true)
+    try {
+      const state = await api.updateAiViewState({ controller: 'ui', ...patch })
+      setAiView(state)
+      setAiViewError(null)
+      return state
+    } catch (error) {
+      setAiViewError(error.message)
+      return null
+    } finally {
+      aiViewBusyRef.current = false
+      setAiViewSaving(false)
+    }
+  }, [])
+
+  const sendAiCommand = useCallback(async (command) => {
+    aiViewBusyRef.current = true
+    setAiViewSaving(true)
+    try {
+      const state = await api.aiCommand(command)
+      setAiView(state)
+      setAiViewError(null)
+      return state
+    } catch (error) {
+      setAiViewError(error.message)
+      return null
+    } finally {
+      aiViewBusyRef.current = false
+      setAiViewSaving(false)
+    }
+  }, [])
+
+  const resetAiView = useCallback(async () => {
+    aiViewBusyRef.current = true
+    setAiViewSaving(true)
+    try {
+      const state = await api.resetAiViewState()
+      setAiView(state)
+      setAiViewError(null)
+      return state
+    } catch (error) {
+      setAiViewError(error.message)
+      return null
+    } finally {
+      aiViewBusyRef.current = false
+      setAiViewSaving(false)
+    }
+  }, [])
+
   const loadGpu = useCallback(async (refresh = false) => {
     setRefreshing(true)
     setGpuError(null)
@@ -99,6 +169,12 @@ export default function App() {
       .then(setAppConfig)
       .catch((error) => setNotice({ type: 'error', message: error.message }))
   }, [loadGpu])
+
+  useEffect(() => {
+    refreshAiView(true)
+    const timer = window.setInterval(() => refreshAiView(), 4000)
+    return () => window.clearInterval(timer)
+  }, [refreshAiView])
 
   useEffect(() => {
     if (targetDir) {
@@ -188,6 +264,18 @@ export default function App() {
         setSourcePath(path)
         setMetadata(meta)
         setCurrentTime(0)
+        const sphericalSource = Boolean(meta.spherical)
+        updateAiView({
+          active: sphericalSource,
+          source_path: path,
+          pan: 0,
+          tilt: 0,
+          zoom: 1,
+          fov: 90,
+          tracking_mode: sphericalSource ? 'manual' : 'off',
+          target: '',
+          keyframe_offsets: [],
+        })
         setSettings((previous) => ({
           ...previous,
           rotation: meta.suggested_rotation || 'none',
@@ -205,7 +293,7 @@ export default function App() {
         setMetadataLoading(false)
       }
     },
-    [loadSubtitles],
+    [loadSubtitles, updateAiView],
   )
 
   const addSegment = useCallback((segment) => {
@@ -404,6 +492,7 @@ export default function App() {
             onTimeUpdate={setCurrentTime}
             currentTime={currentTime}
             videoRef={videoRef}
+            aiView={aiView}
           >
             <Timeline
               duration={metadata?.duration || 0}
@@ -469,6 +558,14 @@ export default function App() {
         subtitleFiles={subtitleFiles}
         onRefreshSubtitles={() => loadSubtitles(sourcePath)}
         subtitlesLoading={subtitlesLoading}
+        aiView={aiView}
+        aiViewSaving={aiViewSaving}
+        aiViewError={aiViewError}
+        onAiViewChange={updateAiView}
+        onAiViewCommand={sendAiCommand}
+        onAiViewReset={resetAiView}
+        aiViewEndpoint={appConfig?.ai_view?.view_state_endpoint || '/api/ai/view-state'}
+        currentTime={currentTime}
       />
     </div>
   )

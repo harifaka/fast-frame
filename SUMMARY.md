@@ -116,16 +116,34 @@ Full setup, troubleshooting and API docs: [`README.md`](README.md). Every autono
 - **CPU override + docs:** `docker-compose.cpu.yml` (`gpus: []`) and README sections for CPU-only
   mode, Windows 10/11 LAN access and SMB folder sharing.
 
+### Phase 8 — Insta360 `.insp` support & mock AI view selector (MCP-ready)
+- **Spherical containers:** `.insp`/`.insv` joined `.mp4`/`.mkv`/`.avi` in `VIDEO_EXTENSIONS`, and
+  `backend/services/insp_service.py` probes them in place with `ffprobe`, falling back to Pillow for
+  JPEG stills (`jpeg_pipe` one-frame streams are still treated as stills). Listings carry a
+  `spherical` flag and `/api/video/metadata` returns a `spherical` block
+  (projection, lens count, still/video, dimensions, XMP-derived tags).
+- **Neutral preview:** selecting an `.insp` file renders the still/first frame with a rule-of-thirds
+  grid and a toggleable `AI view` frustum overlay driven by pan/tilt/zoom/FOV.
+- **AI view selector:** `backend/services/ai_view_service.py` owns the framing document (clamped
+  pan/tilt/roll/zoom/FOV, tracking mode, target, keyframe offsets, revision) exposed via
+  `GET/POST /api/ai/view-state`, `POST /api/ai/view-state/reset` and `POST /api/ai/mcp-command`.
+  `AiViewPanel.jsx` in the new `AI VIEW` drawer card shows a green *MCP AI Control Ready* badge,
+  live sliders, keyframe capture and a `Simulate AI` button; the UI polls every 4 s so external MCP
+  agents steer the preview live. Optional `AI_VIEW_STATE_FILE` persists state across restarts.
+- **Rendering unchanged:** framing is preview-only in this phase; renders still use the configured
+  crop/rotation.
+
 ---
 
 ## Verification performed
 
-- **80 backend unit tests pass** (`python -m unittest discover -s tests`): atempo math, filter-graph
+- **110 backend unit tests pass** (`python -m unittest discover -s tests`): atempo math, filter-graph
   ordering, multi-cut concat, subtitle escaping/ordering, NVENC command flags, fps-mode
   compatibility, crop pixel math (rotation-aware, even), target duration, filename sanitising,
-  collision protection, network URL/SMB helpers, and the new host-mount rules (lexical `..`
-  rejection, drive-mount symlink resolution, hidden WSL folders, drive shortcuts, unreadable
-  entries).
+  collision protection, network URL/SMB helpers, the host-mount rules (lexical `..` rejection,
+  drive-mount symlink resolution, hidden WSL folders, drive shortcuts, unreadable entries), `.insp`
+  discovery/projection/metadata shaping, and AI view state clamping, keyframes, MCP commands and
+  file-backed persistence.
 - **FastAPI app imports cleanly** and exposes every route; WebSocket snapshot + progress events
   verified against a live render (percent rose 0 → 21 → 45 → 69 → 91 → 100 with FPS/speed/ETA).
 - **Real FFmpeg renders verified**:

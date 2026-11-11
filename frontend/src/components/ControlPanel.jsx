@@ -21,6 +21,7 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { formatBytes, formatClock, formatSpeed } from '../utils'
+import AiViewPanel from './AiViewPanel'
 
 const SPEED_PRESETS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3]
 const FONT_SIZES = [
@@ -49,6 +50,7 @@ const SECTIONS = [
   { id: 'source', label: 'Source', icon: Film, tone: 'text-accent-400' },
   { id: 'speed', label: 'Speed', icon: Gauge, tone: 'text-accent-400' },
   { id: 'encoding', label: 'Encoding', icon: Cpu, tone: 'text-emerald-400' },
+  { id: 'aiview', label: 'AI View', icon: Sparkles, tone: 'text-accent-400' },
   { id: 'subtitles', label: 'Subtitles', icon: Captions, tone: 'text-indigo-400' },
 ]
 
@@ -136,6 +138,14 @@ export default function ControlPanel({
   open = false,
   onClose,
   focusSection = null,
+  aiView = null,
+  aiViewSaving = false,
+  aiViewError = null,
+  onAiViewChange,
+  onAiViewCommand,
+  onAiViewReset,
+  aiViewEndpoint = '/api/ai/view-state',
+  currentTime = 0,
 }) {
   const speed = Number(settings.speed) || 1
   const encoderName =
@@ -265,7 +275,7 @@ export default function ControlPanel({
               CONFIGURATION
             </div>
             <div className="truncate text-[10px] uppercase tracking-[0.18em] text-slate-500">
-              Presets · Source · Speed · Encoding · Subtitles
+              Presets · Source · Speed · Encoding · AI View · Subtitles
             </div>
           </div>
           <button
@@ -667,6 +677,41 @@ export default function ControlPanel({
                 file is never modified.
               </p>
             </div>
+          </ConfigSection>
+
+          <ConfigSection
+            id="aiview"
+            title="AI View Selector"
+            icon={Sparkles}
+            tone="text-accent-400"
+            open={openSections.aiview}
+            onToggle={() => toggleSection('aiview')}
+            sectionRef={(node) => {
+              sectionRefs.current.aiview = node
+            }}
+            badge={
+              <span
+                className={`chip ${
+                  metadata?.spherical
+                    ? 'border-accent-500/30 bg-accent-500/10 text-accent-300'
+                    : 'border-white/10 bg-white/[0.03] text-slate-500'
+                }`}
+              >
+                {metadata?.spherical ? '360° source' : 'MCP ready'}
+              </span>
+            }
+          >
+            <AiViewPanel
+              state={aiView}
+              onChange={onAiViewChange}
+              onCommand={onAiViewCommand}
+              onReset={onAiViewReset}
+              disabled={!sourcePath}
+              saving={aiViewSaving}
+              error={aiViewError}
+              currentTime={currentTime}
+              endpointHint={aiViewEndpoint}
+            />
           </ConfigSection>
 
           <ConfigSection

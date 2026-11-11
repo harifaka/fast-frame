@@ -2,8 +2,7 @@
 ## GPU-Accelerated Video Speed & Processing Studio (Zero-Copy Docker WebApp)
 ## Development Roadmap & Specification
 
-**Status:** Phases 1–7 are implemented and committed. Phase 8 (Insta360 `.insp`
-support & mock AI view selector) is the current phase.
+**Status:** Phases 1–8 are implemented, verified and committed.
 
 ### 1. Project Overview & Core Principles
 The goal is to build a Dockerized, web-based video processing application utilizing NVIDIA RTX 3060 (NVENC) GPU acceleration.
@@ -39,7 +38,7 @@ The goal is to build a Dockerized, web-based video processing application utiliz
 | 5 | Render queue, presets & fault tolerance | ✅ Implemented |
 | 6 | Focus-mode layout: configuration drawer & always-on render bar | ✅ Implemented |
 | 7 | Auto-mounted host drives, network/SMB sources & slim multi-stage image | ✅ Implemented |
-| 8 | Insta360 `.insp` support & mock AI view selector (MCP-ready) | 🚧 Current |
+| 8 | Insta360 `.insp` support & mock AI view selector (MCP-ready) | ✅ Implemented |
 
 Each phase lists the tasks it delivered and its definition of done; completed phases are
 kept as the reference specification for the behaviour that must not regress.
@@ -189,7 +188,7 @@ Running `docker compose up --build -d` builds the slim image (~240 MB compressed
 
 ---
 
-#### 🔮 PHASE 8: Insta360 `.insp` File Support & Mock AI View Selector (MCP-Ready) 🚧
+#### 🔮 PHASE 8: Insta360 `.insp` File Support & Mock AI View Selector (MCP-Ready) ✅
 **Goal:** Add support for Insta360 `.insp` container files with a neutral rectilinear preview mode and a mocked AI View Selector in the UI, designed to be controlled remotely via Model Context Protocol (MCP) by external AI agents for intelligent framing, tracking, and zoom.
 
 **Tasks (Backend & Services):**

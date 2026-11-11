@@ -18,13 +18,15 @@ from config import (
     DEFAULT_SUBTITLE_FONT_SIZE,
     OUTPUT_EXTENSIONS,
     PathSecurityError,
+    SPHERICAL_EXTENSIONS,
     SUBTITLE_EXTENSIONS,
     SUBTITLE_FONT_SIZES,
     SUPPORTED_SPEED_MAX,
     SUPPORTED_SPEED_MIN,
     VIDEO_EXTENSIONS,
 )
-from routers import filesystem, network, queue
+from routers import ai, filesystem, network, queue
+from services.ai_view_service import TRACKING_MODES
 from services.gpu_service import get_gpu_info
 from services.worker import event_bus, job_manager
 
@@ -35,7 +37,7 @@ logging.basicConfig(
 logger = logging.getLogger("fastframe")
 
 FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.1.0"
 
 
 @asynccontextmanager
@@ -85,6 +87,7 @@ app.add_middleware(
 app.include_router(filesystem.router)
 app.include_router(network.router)
 app.include_router(queue.router)
+app.include_router(ai.router)
 
 
 @app.websocket("/ws/progress")
@@ -150,6 +153,7 @@ async def system_config() -> dict:
         "version": APP_VERSION,
         "host_root": str(config.host_root()),
         "video_extensions": list(VIDEO_EXTENSIONS),
+        "spherical_extensions": list(SPHERICAL_EXTENSIONS),
         "subtitle_extensions": list(SUBTITLE_EXTENSIONS),
         "output_extensions": list(OUTPUT_EXTENSIONS),
         "speed": {"min": SUPPORTED_SPEED_MIN, "max": SUPPORTED_SPEED_MAX},
@@ -159,6 +163,13 @@ async def system_config() -> dict:
             "enabled": True,
             "root": str(config.network_root()),
             "url_schemes": list(config.NETWORK_URL_SCHEMES),
+        },
+        "ai_view": {
+            "enabled": True,
+            "mcp_ready": True,
+            "view_state_endpoint": "/api/ai/view-state",
+            "mcp_command_endpoint": "/api/ai/mcp-command",
+            "tracking_modes": list(TRACKING_MODES),
         },
         "codecs": [
             {"id": "h264", "label": "H.264 (max compatibility)"},

@@ -242,3 +242,20 @@ This file records every non-obvious architectural decision made while implementi
     without the ~3 GB CUDA base. `docker-compose.cpu.yml` clears the GPU request with `gpus: []`
     and blanks the `NVIDIA_*` variables for machines without a driver; the runtime NVENC → CPU
     retry from Phase 2 still protects individual jobs.
+
+52. **Insta360 `.insp`/`.insv` are first-class sources, not extracted temp files.** They join
+    `VIDEO_EXTENSIONS` so the browser, metadata, streaming and render paths behave like any other
+    clip. `insp_service` probes them with `ffprobe` first and falls back to Pillow for JPEG
+    stills; ffprobe's `jpeg_pipe` demuxer exposes a one-frame "video" stream with a fake 25 fps, so
+    image-pipe formats are explicitly classified as stills. Pillow is pinned in
+    `requirements.txt` because without it every `.insp` still would report unknown dimensions.
+53. **AI framing lives in one shared, clamped document.** `ai_view_service` owns pan/tilt/roll/
+    zoom/FOV, tracking mode, target and keyframe offsets and exposes the same snapshot to the UI and
+    to MCP agents (`/api/ai/view-state`, `/api/ai/mcp-command`). Every write bumps a `revision`
+    and clamps to safe ranges, so a misbehaving agent cannot push the preview off the sphere. The UI
+    polls every 4 s (and pauses while it is saving) instead of adding a second WebSocket, keeping the
+    existing `/ws/progress` channel focused on render jobs. State is in memory by default with an
+    optional `AI_VIEW_STATE_FILE` mirror.
+54. **AI framing is preview-only in Phase 8.** Rendering still uses the crop/rotation controls; the
+    view selector intentionally does not alter FFmpeg output until a real tracker and projection
+    filter are implemented, so the mock cannot silently change rendered files.

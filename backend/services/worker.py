@@ -16,6 +16,7 @@ from typing import Any
 from config import (
     MAX_STDERR_BYTES,
     PathSecurityError,
+    SUPPORTED_INPUT_LABEL,
     is_network_url,
     is_subtitle_file,
     is_video_file,
@@ -170,7 +171,7 @@ def plan_source(raw: str) -> dict[str, Any]:
                     f"The source file could not be found on {location.name}"
                 )
             if not is_video_file(Path(name)):
-                raise JobValidationError("Unsupported input format (use .mp4, .mkv or .avi)")
+                raise JobValidationError(f"Unsupported input format (use {SUPPORTED_INPUT_LABEL})")
             return {
                 "kind": "smb",
                 "display": value,
@@ -182,7 +183,7 @@ def plan_source(raw: str) -> dict[str, Any]:
         if not candidate.is_file():
             raise JobValidationError("The source path is not a file")
         if not is_video_file(candidate):
-            raise JobValidationError("Unsupported input format (use .mp4, .mkv or .avi)")
+            raise JobValidationError(f"Unsupported input format (use {SUPPORTED_INPUT_LABEL})")
         return {
             "kind": "native",
             "display": str(candidate),
@@ -198,7 +199,7 @@ def plan_source(raw: str) -> dict[str, Any]:
     if not candidate.is_file():
         raise JobValidationError("The source path is not a file")
     if not is_video_file(candidate):
-        raise JobValidationError("Unsupported input format (use .mp4, .mkv or .avi)")
+        raise JobValidationError(f"Unsupported input format (use {SUPPORTED_INPUT_LABEL})")
     return {
         "kind": "local",
         "display": str(candidate),

@@ -79,6 +79,22 @@ export const api = {
   }),
   cancelJob: (jobId) => request(`/api/queue/${encodeURIComponent(jobId)}`, { method: 'DELETE' }),
   clearCompleted: () => request('/api/queue/clear-completed', { method: 'POST' }),
+  aiViewState: () => request('/api/ai/view-state'),
+  updateAiViewState: (payload) => request('/api/ai/view-state', {
+    method: 'POST',
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload ?? {}),
+  }),
+  resetAiViewState: () => request('/api/ai/view-state/reset', {
+    method: 'POST',
+    headers: JSON_HEADERS,
+    body: '{}',
+  }),
+  aiCommand: (payload) => request('/api/ai/mcp-command', {
+    method: 'POST',
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload ?? {}),
+  }),
 }
 
 export function openProgressSocket(onEvent, onStatusChange) {

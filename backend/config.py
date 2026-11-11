@@ -13,9 +13,14 @@ import re
 from pathlib import Path
 from urllib.parse import unquote, urlparse, urlunparse
 
-VIDEO_EXTENSIONS: tuple[str, ...] = (".mp4", ".mkv", ".avi")
+VIDEO_EXTENSIONS: tuple[str, ...] = (".mp4", ".mkv", ".avi", ".insp", ".insv")
 SUBTITLE_EXTENSIONS: tuple[str, ...] = (".srt",)
 OUTPUT_EXTENSIONS: tuple[str, ...] = (".mp4", ".mkv")
+
+#: Insta360 spherical containers: ``.insp`` still/short clips and ``.insv`` video.
+SPHERICAL_EXTENSIONS: tuple[str, ...] = (".insp", ".insv")
+#: Human readable list used in validation errors.
+SUPPORTED_INPUT_LABEL = ".mp4, .mkv, .avi, .insp, .insv"
 
 SUPPORTED_SPEED_MIN = 0.25
 SUPPORTED_SPEED_MAX = 4.0
@@ -246,6 +251,12 @@ def discover_drive_shortcuts() -> list[dict[str, str]]:
 
 def is_video_file(path: Path) -> bool:
     return path.suffix.lower() in VIDEO_EXTENSIONS
+
+
+def is_spherical_file(path: Path) -> bool:
+    """True for Insta360 ``.insp`` / ``.insv`` spherical containers."""
+
+    return path.suffix.lower() in SPHERICAL_EXTENSIONS
 
 
 def is_subtitle_file(path: Path) -> bool:

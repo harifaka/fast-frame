@@ -152,14 +152,14 @@ The `PREVIEW` + `MULTI-CUT TIMELINE` panel owns the whole window. Everything els
 - `Render Now` and `+ Add to Queue` are always here, so a render can be started without opening the
   drawer. The active job's progress card appears right below the bar.
 
-The drawer slides in from the right (`Esc`, the backdrop or ✕ closes it) and holds five collapsible
-cards — `PRESETS`, `SOURCE`, `SPEED`, `ENCODING`, `SUBTITLES`. The pills at the top of the drawer
-jump to a card, and `Expand all` / `Collapse all` opens or folds every card at once. `Render Now`
-and `+ Add to Queue` are repeated in the drawer footer.
+The drawer slides in from the right (`Esc`, the backdrop or ✕ closes it) and holds six collapsible
+cards — `PRESETS`, `SOURCE`, `SPEED`, `ENCODING`, `AI VIEW`, `SUBTITLES`. The pills at the top of
+the drawer jump to a card, and `Expand all` / `Collapse all` opens or folds every card at once.
+`Render Now` and `+ Add to Queue` are repeated in the drawer footer.
 
 1. **Pick a source** — `Browse files` in the preview header (or `Choose` in the drawer's `SOURCE`
-   card) opens the zero-copy browser. Only `.mp4`, `.mkv`, `.avi` are
-   selectable; clicking a folder enters it, double-clicking a file selects it.
+   card) opens the zero-copy browser. Only `.mp4`, `.mkv`, `.avi` and Insta360
+   `.insp`/`.insv` are selectable; clicking a folder enters it, double-clicking a file selects it.
 2. **Pick a destination** — click `Destination: …` in the command bar (or the destination row in
    `ENCODING`) to choose the folder where the render is written on the host. Defaults to the
    source file's folder. The source is never modified.
@@ -237,6 +237,48 @@ Fast-Frame resolves the final path on the server: if the target exists (or is th
 `_2`, … is appended. Concurrent queued jobs reserve their names up front, so two jobs can never
 write to the same file.
 
+### Insta360 `.insp` / `.insv` sources & the AI view selector
+
+Insta360 spherical containers are first-class sources. They are listed in the browser with a
+`spherical` flag, inspected in place and never extracted:
+
+- `backend/services/insp_service.py` probes the container with `ffprobe` and falls back to Pillow
+  for JPEG stills, so `.insp` stills get real width/height/codec plus XMP spherical metadata, and
+  `.insv` clips keep their video streams. Images that ffprobe reports as a `jpeg_pipe` one-frame
+  stream are still classified as stills.
+- The preview switches to a neutral equirectangular/rectilinear mode: the still (or first frame)
+  is shown with a rule-of-thirds grid and an `AI view` frustum overlay that visualises pan, tilt and
+  zoom. Toggle the overlay with the `AI view` chip in the preview header.
+- The `AI VIEW` card in the configuration drawer mirrors the framing state (pan/tilt/zoom/FOV,
+  tracking mode, tracking target, keyframe offsets) and shows a green **MCP AI Control Ready**
+  badge. `Simulate AI` nudges the framing like an external agent would; `Keyframe @ mm:ss` records
+  the current framing at the playhead.
+
+The framing document is served by `backend/services/ai_view_service.py` and is shared with external
+Model Context Protocol agents:
+
+```bash
+# Read the current framing directives
+curl http://localhost:8000/api/ai/view-state
+
+# Update framing (UI-shaped partial update)
+curl -X POST http://localhost:8000/api/ai/view-state \
+     -H 'Content-Type: application/json' \
+     -d '{"pan": 25, "tilt": -10, "zoom": 1.8, "tracking_mode": "subject", "active": true}'
+
+# MCP-shaped envelope: set_view | set_tracking | add_keyframe | clear_keyframes |
+#                       activate | deactivate | reset
+curl -X POST http://localhost:8000/api/ai/mcp-command \
+     -H 'Content-Type: application/json' \
+     -d '{"action": "add_keyframe", "keyframe": {"time": 3.5, "pan": 10, "zoom": 1.6}}'
+```
+
+Values are clamped (`pan` ±180°, `tilt` ±90°, `zoom` 0.5–8×, `fov` 20–140°) and every update bumps
+a `revision` counter. The UI polls the endpoint every 4 s, so an MCP agent's changes appear in the
+preview without a reload. State is in memory by default; set `AI_VIEW_STATE_FILE=/path/state.json`
+to survive a restart. AI framing is preview-only in this phase — renders still use the configured
+crop/rotation.
+
 ---
 
 ## 5. Rendering pipeline
@@ -280,10 +322,14 @@ Details worth knowing:
 | POST | `/api/fs/network-mount` | Connect a share (`{ path, username?, password?, name? }`) |
 | DELETE | `/api/fs/network-mount/{id}` | Disconnect a share |
 | GET | `/api/fs/network-stream?path=…` | Loopback relay FFmpeg uses for non-mounted shares |
-| GET | `/api/video/metadata?path=…` | Duration, resolution, FPS, codec, audio, rotation |
+| GET | `/api/video/metadata?path=…` | Duration, resolution, FPS, codec, audio, rotation (`.insp`/`.insv` include a `spherical` block) |
 | GET | `/api/video/metadata?url=…` | Same, probed directly from a network URL |
-| GET | `/api/video/stream?path=…` | HTTP 206 byte-range streaming (seekable `<video>`) |
+| GET | `/api/video/stream?path=…` | HTTP 206 byte-range streaming (seekable `<video>`/`<img>`) |
 | GET | `/api/video/stream?url=…` | Proxy a remote HTTP/WebDAV stream (Range preserved) |
+| GET | `/api/ai/view-state` | AI framing directives (pan, tilt, zoom, FOV, tracking, keyframes) |
+| POST | `/api/ai/view-state` | Partial framing update from the UI or an agent |
+| POST | `/api/ai/view-state/reset` | Reset framing to neutral |
+| POST | `/api/ai/mcp-command` | MCP command envelope (`set_view`, `set_tracking`, `add_keyframe`, …) |
 | POST | `/api/queue/add` | Queue/render a job (`render_now: true` jumps the queue) |
 | GET | `/api/queue` | Jobs, processing id, queue depth |
 | DELETE | `/api/queue/{id}` | Cancel queued/running job or dismiss a finished one |
@@ -388,23 +434,26 @@ fast-frame/
 ├── backend/
 │   ├── main.py                # FastAPI app, WebSocket, static frontend
 │   ├── config.py              # Mount root, drive shortcuts, path-traversal defence
-│   ├── models.py              # Pydantic job/options models
-│   ├── routers/{filesystem,network,queue}.py
+│   ├── models.py              # Pydantic job/options + AI framing models
+│   ├── routers/{filesystem,network,queue,ai}.py
 │   └── services/
+│       ├── ai_view_service.py # AI framing state + MCP command handling
 │       ├── ffmpeg_builder.py  # filter_complex + NVENC command builder
 │       ├── ffprobe_service.py # metadata extraction
 │       ├── gpu_service.py     # nvidia-smi + encoder detection
+│       ├── insp_service.py    # Insta360 .insp/.insv inspection (ffprobe + Pillow)
 │       ├── network_service.py # SMB/CIFS + smbprotocol access
 │       └── worker.py          # async queue, FFmpeg runner, progress parser
 ├── frontend/                  # React + Vite + Tailwind studio UI
 │   └── src/components/
+│       ├── AiViewPanel.jsx    # Mock AI view selector (pan/tilt/zoom, MCP-ready)
 │       ├── CommandBar.jsx     # Configuration toggle, summary pills, destination, render actions
 │       ├── ControlPanel.jsx   # Slide-over configuration drawer with collapsible cards
 │       ├── FileBrowser.jsx    # Host drives (quick drive bar) + network/SMB/URL tabs
 │       ├── NetworkPanel.jsx   # Direct URL & SMB/NAS share connector
-│       ├── VideoWorkspace.jsx # Preview player, rotate/crop toolbar, multi-cut timeline
+│       ├── VideoWorkspace.jsx # Preview player, neutral 360° view, rotate/crop toolbar
 │       └── RenderQueue.jsx    # Live progress & batch queue drawer
-└── backend/tests/             # command-builder, queue helper, network & host-mount tests
+└── backend/tests/             # command-builder, queue helper, network, host-mount, .insp & AI view tests
 ```
 
 `DECISIONS.md` records every architectural trade-off made during implementation.
