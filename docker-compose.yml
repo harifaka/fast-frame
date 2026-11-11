@@ -3,7 +3,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: fast-frame:latest
+    # Same name the CI pipeline publishes to, so a locally built image and the
+    # pre-built GHCR image are interchangeable. Pin a release with
+    # FAST_FRAME_TAG=<count>:
+    #   docker compose pull && docker compose up -d   # use the released image
+    #   docker compose up --build -d                  # build locally
+    image: ghcr.io/harifaka/fast-frame:${FAST_FRAME_TAG:-latest}
     container_name: fast-frame
     restart: unless-stopped
     ports:

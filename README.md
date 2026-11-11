@@ -21,6 +21,39 @@ reads the source file and writes the result directly on the host filesystem. You
 
 ---
 
+## 📌 Quick start — run the released image (no build)
+
+**Pinned fast path.** Every push to `main` builds and publishes the image to GitHub Container
+Registry, so the fastest way to run Fast-Frame is the pre-built `latest` image — no Node, no
+`npm ci`, no local build:
+
+```bash
+docker pull ghcr.io/harifaka/fast-frame:latest
+
+docker run -d --name fast-frame --gpus all -p 8000:8000 \
+  -v /run/desktop/mnt/host:/mnt/host/drives \
+  -v C:/:/mnt/host/c \
+  -v ./media:/mnt/host/media \
+  ghcr.io/harifaka/fast-frame:latest
+```
+
+→ Open **http://localhost:8000**. On a machine without an NVIDIA GPU, drop `--gpus all` — the
+`NVIDIA_*` variables are already baked into the image and renders fall back to `libx264`. Inside a
+clone of this repository the shorter form is `docker compose pull && docker compose up -d`
+(details in [§3](#3-run-it)).
+
+| Where | Link |
+| --- | --- |
+| Container images (`latest`, `1`, `2`, …) | https://github.com/harifaka/fast-frame/pkgs/container/fast-frame |
+| Releases (`v1`, `v2`, … with notes) | https://github.com/harifaka/fast-frame/releases |
+| Pipeline | [`.github/workflows/release.yml`](.github/workflows/release.yml) |
+
+Image tags are the sequential commit count on `main` (`1`, `2`, `16`, …), and each build also gets
+a matching `v<count>` GitHub Release — pin one of those for reproducible deployments instead of
+`latest`.
+
+---
+
 ## 1. Requirements
 
 - **Docker Desktop** (Windows/macOS) or Docker Engine + Compose v2 (Linux), with **WSL2** backend on Windows.
@@ -79,6 +112,14 @@ that points outside the root is rejected.
 
 ## 3. Run it
 
+**Pre-built (recommended):**
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+**Build from source:**
+
 ```bash
 docker compose up --build -d
 ```
@@ -99,6 +140,37 @@ process to manage. Useful commands:
 docker compose logs -f fast-frame    # live API/FFmpeg logs
 docker compose down                  # stop (renders in progress are terminated)
 docker compose up --build -d         # rebuild after code changes
+```
+
+### Run the pre-built image from GHCR
+
+`docker-compose.yml` names the service image `ghcr.io/harifaka/fast-frame:${FAST_FRAME_TAG:-latest}`,
+matching what CI publishes, so the compose file works for both paths:
+
+```bash
+docker compose pull            # fetch the released image
+docker compose up -d           # start it (no --build)
+```
+
+If the GHCR package is still private, authenticate once with a token that has `read:packages`
+before pulling:
+
+```bash
+echo $CR_PAT | docker login ghcr.io -u <your-github-username> --password-stdin
+```
+
+Building locally is still one flag away and produces the same image name:
+
+```bash
+docker compose up --build -d
+```
+
+To pin a specific release, set `FAST_FRAME_TAG` to the sequential build number shown on the
+[releases page](https://github.com/harifaka/fast-frame/releases):
+
+```bash
+FAST_FRAME_TAG=16 docker compose pull && FAST_FRAME_TAG=16 docker compose up -d
+# PowerShell: $env:FAST_FRAME_TAG="16"; docker compose pull; docker compose up -d
 ```
 
 ### GPU passthrough in Compose
@@ -406,6 +478,22 @@ cd backend
 python -m unittest discover -s tests
 ```
 
+### CI / releases
+
+[`.github/workflows/release.yml`](.github/workflows/release.yml) runs on every push to `main`:
+
+1. `git rev-list --count HEAD` (with `fetch-depth: 0`) yields the sequential commit count on `main`
+   — `1`, `2`, `16`, … — used verbatim as the image tag.
+2. The root `Dockerfile` is built with Buildx and GitHub Actions layer caching (`type=gha`,
+   `mode=max`), then pushed to `ghcr.io/harifaka/fast-frame` as `latest` and `<count>`.
+3. A GitHub Release `v<count>` is created on that commit with auto-generated notes and the
+   `docker pull` command in the body.
+
+`concurrency` (`${{ github.workflow }}-${{ github.ref }}`, `cancel-in-progress: true`) cancels an
+older still-running build as soon as a newer commit lands on `main`, so only the newest commit
+publishes. Merges to `main` therefore need `contents: write` and `packages: write` — already set in
+the workflow.
+
 ---
 
 ## 9. Troubleshooting
@@ -431,6 +519,7 @@ fast-frame/
 ├── Dockerfile                 # 2-stage slim build (Node 20 builder -> Python 3.11 + FFmpeg + NVENC env)
 ├── docker-compose.yml         # GPU passthrough + automatic host drive mounts
 ├── docker-compose.cpu.yml     # CPU-only override (gpus: []) for machines without NVIDIA drivers
+├── .github/workflows/release.yml  # push to main -> GHCR image + v<commit-count> release
 ├── backend/
 │   ├── main.py                # FastAPI app, WebSocket, static frontend
 │   ├── config.py              # Mount root, drive shortcuts, path-traversal defence
