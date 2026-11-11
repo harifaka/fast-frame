@@ -36,3 +36,36 @@ This file records every non-obvious architectural decision made while implementi
    stack starts out of the box; Windows (`D:/:/mnt/host/d`) and Linux
    (`/media:/mnt/host/media`) examples are included as comments and documented in
    the README.
+
+## Phase 2 — GPU speed engine, HEVC toggle & pitch-correct audio
+
+10. **Timestamp mode is `passthrough`, not `vfr`.** Verified with real encodes: after
+    `setpts=PTS/2`, `-fps_mode vfr` resamples back to the nominal 30 fps and throws
+    away half of the frames (62 of 120 in a 4 s test). `passthrough` keeps every
+    frame and the correct duration. FFmpeg ≥ 5 uses `-fps_mode passthrough`,
+    older builds (Ubuntu 22.04 ships 4.4) use `-vsync passthrough`; the version is
+    detected once by `gpu_service` and stored on each job.
+11. **Runtime NVENC fallback.** An encoder can be listed yet fail to open (driver
+    too old for the bundled FFmpeg, NVENC session exhaustion, missing
+    `/dev/nvidia*`). A failed hardware job is transparently retried **once** with
+    `libx264`/`libx265`, the job reports `fallback_reason`, and the UI shows it.
+12. **Metadata is stripped (`-map_metadata -1`).** Otherwise a source display matrix
+    could be copied onto raw (already rotated) frames and players would rotate the
+    output a second time.
+13. **Job manager lands in Phase 2.** “Render Now”, live progress and Cancel need a
+    server-side runner, so `JobManager`, `POST /api/queue/add`, `GET /api/queue`
+    and `DELETE /api/queue/{id}` exist now. Phase 5 adds the batch UI, presets,
+    `clear-completed` and the queue drawer on top of the same API.
+14. **Collision protection is implemented early.** Default filenames already avoid
+    overwriting, but a user-edited name could collide with the source; the server
+    therefore resolves the final path (`_1`, `_2`, …) at enqueue time for every
+    job instead of waiting for Phase 5.
+15. **WebSocket protocol.** First frame is `{type: "snapshot", jobs, …}` so a late
+    client is immediately consistent, followed by incremental `{type: "job", job}`
+    events and 20 s `ping` keep-alives. Progress is throttled to 4 Hz.
+16. **Pydantic models live in `models.py`.** Keeps request validation (speed range,
+    crop bounds, segment order) reusable by routers and unit tests.
+17. **Preview speed is browser-side.** `<video>.playbackRate` previews the chosen
+    speed instantly; browsers do not pitch-correct below 0.5×/above 2×, so the
+    rendered file (atempo chain) is the authoritative result.
+

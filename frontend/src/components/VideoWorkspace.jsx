@@ -326,7 +326,8 @@ export default function VideoWorkspace({
           <div className="ml-auto flex items-center gap-2">
             {metadata && (
               <span className="hidden text-[11px] text-slate-600 md:inline">
-                {formatBytes(metadata.size_bytes)} · {metadata.container.split(',')[0]}
+                {formatBytes(metadata.size_bytes)} ·{' '}
+                {metadata.name.split('.').pop()?.toUpperCase() || metadata.container}
               </span>
             )}
             <IconButton label="Reset preview" onClick={() => seek(0)} disabled={!sourcePath}>

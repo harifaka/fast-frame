@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
@@ -21,8 +24,9 @@ from config import (
     SUPPORTED_SPEED_MIN,
     VIDEO_EXTENSIONS,
 )
-from routers import filesystem
+from routers import filesystem, queue
 from services.gpu_service import get_gpu_info
+from services.worker import event_bus, job_manager
 
 logging.basicConfig(
     level=logging.INFO,
@@ -42,7 +46,13 @@ async def lifespan(app: FastAPI):
     except OSError as exc:  # read-only or permission problem
         logger.warning("Could not create host mount %s: %s", root, exc)
     logger.info("Fast-Frame serving host mount %s", root)
-    yield
+    await job_manager.start()
+    logger.info("Render queue worker started")
+    try:
+        yield
+    finally:
+        await job_manager.shutdown()
+        logger.info("Render queue worker stopped")
 
 
 app = FastAPI(
@@ -67,6 +77,43 @@ app.add_middleware(
 )
 
 app.include_router(filesystem.router)
+app.include_router(queue.router)
+
+
+@app.websocket("/ws/progress")
+async def progress_socket(websocket: WebSocket) -> None:
+    """Stream job snapshots and live FFmpeg progress to the studio UI."""
+
+    await websocket.accept()
+    subscriber = event_bus.subscribe()
+
+    async def sender() -> None:
+        while True:
+            try:
+                event = await asyncio.wait_for(subscriber.get(), timeout=20)
+            except asyncio.TimeoutError:
+                event = {"type": "ping", "ts": time.time()}
+            await websocket.send_json(event)
+
+    async def receiver() -> None:
+        while True:
+            await websocket.receive_text()
+
+    try:
+        await websocket.send_json({"type": "snapshot", **job_manager.snapshot()})
+        tasks = [asyncio.create_task(sender()), asyncio.create_task(receiver())]
+        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        for task in pending:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
+        for task in done:
+            with contextlib.suppress(WebSocketDisconnect, asyncio.CancelledError, Exception):
+                task.result()
+    except (WebSocketDisconnect, RuntimeError):
+        pass
+    finally:
+        event_bus.unsubscribe(subscriber)
 
 
 @app.exception_handler(PathSecurityError)

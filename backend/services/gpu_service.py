@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from typing import Any
 
@@ -39,6 +40,13 @@ async def _run(args: list[str]) -> tuple[int, str, str]:
         stdout.decode("utf-8", "replace"),
         stderr.decode("utf-8", "replace"),
     )
+
+
+def parse_ffmpeg_major(version_output: str) -> int:
+    """Extract the major version from ``ffmpeg -version`` output."""
+
+    match = re.search(r"ffmpeg version\s+(\d+)", version_output or "", re.IGNORECASE)
+    return int(match.group(1)) if match else 0
 
 
 def _parse_encoders(output: str) -> tuple[bool, bool, list[str]]:
@@ -88,7 +96,11 @@ async def _detect() -> dict[str, Any]:
     encoders_code, encoders_out, encoders_err = await _run(
         [FFMPEG_BIN, "-hide_banner", "-loglevel", "error", "-encoders"]
     )
+    version_code, version_out, _version_err = await _run(
+        [FFMPEG_BIN, "-hide_banner", "-version"]
+    )
     ffmpeg_available = encoders_code == 0
+    ffmpeg_major = parse_ffmpeg_major(version_out) if version_code == 0 else 0
     h264_nvenc, hevc_nvenc, nvenc_encoders = (
         _parse_encoders(encoders_out) if ffmpeg_available else (False, False, [])
     )
@@ -115,6 +127,7 @@ async def _detect() -> dict[str, Any]:
         "driver_version": gpu["driver_version"],
         "vram_mb": gpu["vram_mb"],
         "ffmpeg_available": ffmpeg_available,
+        "ffmpeg_major": ffmpeg_major,
         "nvenc_h264": h264_nvenc,
         "nvenc_hevc": hevc_nvenc,
         "nvenc_encoders": nvenc_encoders,
@@ -146,6 +159,7 @@ async def get_gpu_info(force: bool = False) -> dict[str, Any]:
                 "driver_version": None,
                 "vram_mb": None,
                 "ffmpeg_available": False,
+                "ffmpeg_major": 0,
                 "nvenc_h264": False,
                 "nvenc_hevc": False,
                 "nvenc_encoders": [],
@@ -171,5 +185,13 @@ async def resolve_encoders(prefer_gpu: bool = True) -> dict[str, Any]:
             "h264": "h264_nvenc" if info["nvenc_h264"] else "libx264",
             "hevc": "hevc_nvenc" if info["nvenc_hevc"] else "libx265",
             "hardware": bool(info["nvenc_h264"] or info["nvenc_hevc"]),
+            "ffmpeg_major": info.get("ffmpeg_major", 0),
+            "ffmpeg_available": info.get("ffmpeg_available", False),
         }
-    return {"h264": "libx264", "hevc": "libx265", "hardware": False}
+    return {
+        "h264": "libx264",
+        "hevc": "libx265",
+        "hardware": False,
+        "ffmpeg_major": info.get("ffmpeg_major", 0),
+        "ffmpeg_available": info.get("ffmpeg_available", False),
+    }

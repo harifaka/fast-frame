@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CircleAlert, X } from 'lucide-react'
-import { api } from './api'
-import { dirname, suggestOutputName } from './utils'
+import { api, openProgressSocket } from './api'
+import { dirname, formatBytes, suggestOutputName } from './utils'
 import Header from './components/Header'
 import FileBrowser from './components/FileBrowser'
 import VideoWorkspace from './components/VideoWorkspace'
@@ -11,6 +11,7 @@ const DEFAULT_SETTINGS = {
   speed: 1,
   codec: 'h264',
   outputFilename: '',
+  filenameCustom: false,
   segments: [],
   subtitlePath: '',
   subtitleFontSize: 24,
@@ -20,8 +21,11 @@ const DEFAULT_SETTINGS = {
   preferGpu: true,
 }
 
+const ACTIVE_STATUSES = new Set(['processing', 'cancelling'])
+
 export default function App() {
   const videoRef = useRef(null)
+  const jobStatusRef = useRef(new Map())
 
   const [gpuInfo, setGpuInfo] = useState(null)
   const [gpuError, setGpuError] = useState(null)
@@ -39,9 +43,24 @@ export default function App() {
   const [currentTime, setCurrentTime] = useState(0)
   const [notice, setNotice] = useState(null)
 
-  const updateSettings = useCallback((patch) => {
-    setSettings((previous) => ({ ...previous, ...patch }))
-  }, [])
+  const [jobs, setJobs] = useState([])
+  const [wsStatus, setWsStatus] = useState('connecting')
+  const [submitting, setSubmitting] = useState(false)
+
+  const updateSettings = useCallback(
+    (patch) => {
+      setSettings((previous) => {
+        const next = { ...previous, ...patch }
+        const speedOrCodecChanged =
+          patch.speed !== undefined || patch.codec !== undefined
+        if (speedOrCodecChanged && !next.filenameCustom && metadata) {
+          next.outputFilename = suggestOutputName(metadata.name, next.speed, next.codec)
+        }
+        return next
+      })
+    },
+    [metadata],
+  )
 
   const loadGpu = useCallback(async (refresh = false) => {
     setRefreshing(true)
@@ -71,6 +90,53 @@ export default function App() {
     }
   }, [targetDir])
 
+  const handleProgressEvent = useCallback((event) => {
+    if (event.type === 'snapshot') {
+      const snapshotJobs = event.jobs || []
+      setJobs(snapshotJobs)
+      snapshotJobs.forEach((job) => jobStatusRef.current.set(job.id, job.status))
+      return
+    }
+    if (event.type !== 'job' || !event.job) return
+
+    const incoming = event.job
+    const previousStatus = jobStatusRef.current.get(incoming.id)
+    jobStatusRef.current.set(incoming.id, incoming.status)
+
+    setJobs((previous) => {
+      const index = previous.findIndex((job) => job.id === incoming.id)
+      if (index === -1) return [...previous, incoming]
+      const next = [...previous]
+      next[index] = incoming
+      return next
+    })
+
+    if (incoming.status === 'completed' && previousStatus !== 'completed') {
+      setNotice({
+        type: 'success',
+        message: `Render complete → ${incoming.output_path} (${formatBytes(incoming.output_size_bytes)})`,
+      })
+    } else if (incoming.status === 'failed' && previousStatus !== 'failed') {
+      setNotice({ type: 'error', message: `Render failed: ${incoming.error}` })
+    } else if (incoming.status === 'cancelled' && previousStatus !== 'cancelled') {
+      setNotice({ type: 'error', message: 'Render cancelled' })
+    }
+  }, [])
+
+  useEffect(() => {
+    api
+      .queue()
+      .then((snapshot) => {
+        const snapshotJobs = snapshot.jobs || []
+        setJobs(snapshotJobs)
+        snapshotJobs.forEach((job) => jobStatusRef.current.set(job.id, job.status))
+      })
+      .catch(() => {
+        /* the WebSocket snapshot will populate the list */
+      })
+    return openProgressSocket(handleProgressEvent, setWsStatus)
+  }, [handleProgressEvent])
+
   const selectSource = useCallback(async (path) => {
     setBrowser(null)
     setMetadataLoading(true)
@@ -82,11 +148,12 @@ export default function App() {
       setCurrentTime(0)
       setSettings((previous) => ({
         ...previous,
-        rotation: meta.suggested_rotation || 'none',
+        rotation: 'none',
         flipHorizontal: false,
         segments: [],
         subtitlePath: '',
         crop: null,
+        filenameCustom: false,
         outputFilename: suggestOutputName(meta.name, previous.speed, previous.codec),
       }))
       setTargetDir((previous) => previous || dirname(path))
@@ -96,6 +163,76 @@ export default function App() {
       setMetadataLoading(false)
     }
   }, [])
+
+  const submitRender = useCallback(
+    async ({ renderNow = true } = {}) => {
+      if (!sourcePath || !targetDir) {
+        setNotice({
+          type: 'error',
+          message: 'Select a source video and a destination folder first.',
+        })
+        return
+      }
+      setSubmitting(true)
+      try {
+        const job = await api.addToQueue({
+          input_path: sourcePath,
+          output_dir: targetDir,
+          output_filename: settings.outputFilename || null,
+          render_now: renderNow,
+          options: {
+            speed: Number(settings.speed) || 1,
+            codec: settings.codec,
+            segments: settings.segments,
+            subtitle_path: settings.subtitlePath || null,
+            subtitle_font_size: Number(settings.subtitleFontSize) || 24,
+            rotation: settings.rotation,
+            flip_horizontal: settings.flipHorizontal,
+            crop: settings.crop,
+            prefer_gpu: settings.preferGpu,
+          },
+        })
+        jobStatusRef.current.set(job.id, job.status)
+        setJobs((previous) =>
+          previous.some((existing) => existing.id === job.id) ? previous : [...previous, job],
+        )
+        setNotice({
+          type: 'success',
+          message: `${renderNow ? 'Rendering' : 'Queued'} ${job.output_filename}`,
+        })
+      } catch (error) {
+        setNotice({ type: 'error', message: error.message })
+      } finally {
+        setSubmitting(false)
+      }
+    },
+    [settings, sourcePath, targetDir],
+  )
+
+  const cancelJob = useCallback(async (jobId) => {
+    try {
+      const job = await api.cancelJob(jobId)
+      jobStatusRef.current.set(job.id, job.status)
+      setJobs((previous) =>
+        previous.map((existing) => (existing.id === job.id ? job : existing)),
+      )
+    } catch (error) {
+      setNotice({ type: 'error', message: error.message })
+    }
+  }, [])
+
+  const activeJob = useMemo(
+    () => jobs.find((job) => ACTIVE_STATUSES.has(job.status)) || null,
+    [jobs],
+  )
+  const latestJob = useMemo(() => {
+    if (jobs.length === 0) return null
+    return [...jobs].sort((a, b) => (b.created_at || 0) - (a.created_at || 0))[0]
+  }, [jobs])
+  const progressJob = activeJob || latestJob
+
+  const queuedCount = jobs.filter((job) => job.status === 'queued').length
+  const activeCount = activeJob ? 1 : 0
 
   const browserInitialPath =
     browser?.mode === 'source'
@@ -111,7 +248,9 @@ export default function App() {
         gpuError={gpuError}
         refreshing={refreshing}
         onRefresh={() => loadGpu(true)}
-        wsStatus={undefined}
+        wsStatus={wsStatus}
+        queuedCount={queuedCount}
+        activeCount={activeCount}
       />
 
       {notice && (
@@ -124,7 +263,7 @@ export default function App() {
             }`}
           >
             <CircleAlert className="mt-0.5 h-4 w-4 shrink-0" />
-            <span className="flex-1">{notice.message}</span>
+            <span className="flex-1 break-all">{notice.message}</span>
             <button
               type="button"
               onClick={() => setNotice(null)}
@@ -161,6 +300,12 @@ export default function App() {
             settings={settings}
             onChange={updateSettings}
             metadataLoading={metadataLoading}
+            gpu={gpuInfo}
+            activeJob={progressJob}
+            onCancelJob={cancelJob}
+            onSubmit={submitRender}
+            submitting={submitting}
+            canRender={Boolean(sourcePath && targetDir && metadata)}
           />
         </aside>
       </main>
