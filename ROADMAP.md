@@ -145,24 +145,53 @@ The studio opens with the preview spanning the full width of the window, every c
 
 ---
 
+#### 🌐 PHASE 7: Auto-Mounted Host Drives, Network/SMB Sources & Slim Multi-Stage Image
+**Goal:** Automatically expose all Windows/Linux host drives (`C:`, `D:`, USB drives) without manual `.env` or compose edits, support Network URLs & SMB/NAS shares directly in the File Browser modal, and shrink the Docker image from ~3GB to ~400MB while keeping full NVENC GPU acceleration and automatic CPU fallback.
+
+**Tasks (Docker & Infrastructure):**
+1. **Multi-Stage Slim `Dockerfile` (~400MB with NVENC):**
+   - Stage 1 (`node:20-alpine`): Build `frontend/dist`.
+   - Stage 2 (`python:3.11-slim-bookworm`): Install only `ffmpeg`, `cifs-utils`, and `ca-certificates`. Set `NVIDIA_VISIBLE_DEVICES=all` and `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility` so the host's NVENC drivers (`libnvidia-encode.so`) and `nvidia-smi` are injected at runtime without needing the 3GB CUDA toolkit image.
+2. **Zero-Config Host Drive Mounts in `docker-compose.yml`:**
+   - Mount `/run/desktop/mnt/host:/mnt/host/drives` (Docker Desktop WSL2 automatic root containing all Windows drives `c`, `d`, `e`, USB drives) and `C:/:/mnt/host/c` alongside `./media:/mnt/host/media` by default so the host machine is immediately browsable out of the box.
+   - Bind port `"0.0.0.0:8000:8000"` for instant LAN access on Windows 10/11.
+   - Provide `docker-compose.cpu.yml` (and auto-detection script) so machines without NVIDIA drivers/toolkit installed start cleanly in CPU mode.
+
+**Tasks (Backend & Frontend):**
+1. **Quick Drive Bar in `FileBrowser.jsx`:** One-click buttons for detected Windows/Linux drives (`C:`, `D:`, `E:`, `Users/Downloads`, `Media`) and proper symlink/mount-point resolution under `/mnt/host`.
+2. **Network / NAS / URL Tab in `FileBrowser.jsx`:**
+   - Direct Stream URLs (`http://`, `https://`, `rtsp://`, `webdav://`) passed straight to FFmpeg `-i` with `-reconnect 1`.
+   - Windows SMB / NAS share connector (`//SERVER/Share` or `//host.docker.internal/Share`) usable as both Source and Destination.
+
+**Phase 7 Definition of Done:**
+Running `docker compose up --build -d` builds a ~400MB image, immediately displays all host Windows drives (`C:`, `D:`, USB) and the `Network / NAS / URL` tab in `Browse files`, and renders via NVENC (or CPU fallback if no GPU is installed).
+
+---
+
 ### 4. Target Project Directory Structure
 
 ```text
-video-speed-studio/
-├── docker-compose.yml
-├── Dockerfile
+fast-frame/
+├── docker-compose.yml          # GPU passthrough + automatic host drive mounts (/run/desktop/mnt/host & C:/)
+├── docker-compose.cpu.yml      # CPU-only override for machines without NVIDIA toolkit
+├── Dockerfile                  # Multi-stage slim image (Node 20 builder -> Python 3.11 slim + FFmpeg + NVENC env)
 ├── README.md
 ├── ROADMAP.md
+├── DECISIONS.md
 ├── backend/
 │   ├── requirements.txt
-│   ├── main.py                 # FastAPI app & WebSocket endpoints
-│   ├── config.py               # Mount paths (/mnt/host) & settings
+│   ├── main.py                 # FastAPI app, WebSocket & static frontend serving
+│   ├── config.py               # Mount paths (/mnt/host), symlink-safe validation & network helpers
+│   ├── models.py               # Pydantic job & options schemas
 │   ├── routers/
-│   │   ├── filesystem.py       # File browser, metadata & video range-stream endpoints
+│   │   ├── filesystem.py       # Auto-discovered host drives, metadata & HTTP 206 video stream endpoints
+│   │   ├── network.py          # SMB/NAS mount & stream relay endpoints
 │   │   └── queue.py            # Render queue & job control API
 │   └── services/
 │       ├── ffmpeg_builder.py   # Filter_complex, NVENC, atempo, multi-cut command builder
-│       ├── ffprobe_service.py  # Video metadata extractor
+│       ├── ffprobe_service.py  # Video metadata extractor (local & URL)
+│       ├── gpu_service.py      # nvidia-smi & NVENC encoder detection with CPU fallback
+│       ├── network_service.py  # SMB/CIFS & smbprotocol zero-copy handler
 │       └── worker.py           # Async background FFmpeg runner & progress parser
 └── frontend/
     ├── package.json
@@ -170,9 +199,11 @@ video-speed-studio/
     ├── index.html
     └── src/
         ├── App.jsx
-        ├── components/
-        │   ├── CommandBar.jsx      # Configuration toggle, summary pills, destination, Render Now / + Add to Queue
-        │   ├── FileBrowser.jsx     # Source file & Target directory browser
-        │   ├── VideoWorkspace.jsx  # Video player preview, Crop overlay, Multi-Cut timeline
-        │   ├── ControlPanel.jsx    # Configuration drawer: collapsible Presets, Source, Speed, Encoding, Subtitles
-        │   └── RenderQueue.jsx     # Live progress bar & Batch queue manager
+        └── components/
+            ├── CommandBar.jsx      # Configuration toggle, summary pills, destination, Render Now / + Add to Queue
+            ├── FileBrowser.jsx     # Host Drives (with Quick Drive bar) + Network/SMB/URL modal
+            ├── NetworkPanel.jsx    # Direct URL & Windows/NAS SMB share connection UI
+            ├── VideoWorkspace.jsx  # Video player preview, Crop overlay, Multi-Cut timeline
+            ├── ControlPanel.jsx    # Slide-over Configuration drawer (Presets, Source, Speed, Encoding, Subtitles)
+            └── RenderQueue.jsx     # Live progress bar & Batch queue drawer
+```
