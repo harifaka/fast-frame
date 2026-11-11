@@ -9,8 +9,11 @@ from services.ffmpeg_builder import (
     FFmpegBuildError,
     RenderOptions,
     build_atempo_chain,
+    build_crop_filter,
     build_ffmpeg_command,
     build_filter_graph,
+    build_transform_filters,
+    compute_crop_pixels,
     escape_subtitle_path,
     normalize_segments,
     target_duration,
@@ -183,6 +186,97 @@ class FilterGraphTests(unittest.TestCase):
 
     def test_target_duration_without_segments_uses_source(self) -> None:
         self.assertAlmostEqual(target_duration(make_options(speed=2.0)), 60.0, places=6)
+
+
+class TransformTests(unittest.TestCase):
+    def test_rotation_filters(self) -> None:
+        cases = {
+            "none": [],
+            "90_cw": ["transpose=1"],
+            "90_ccw": ["transpose=2"],
+            "180": ["transpose=1", "transpose=1"],
+        }
+        for rotation, expected in cases.items():
+            options = make_options(speed=1.0, rotation=rotation)
+            self.assertEqual(build_transform_filters(options), expected)
+
+    def test_flip_is_applied_after_rotation(self) -> None:
+        options = make_options(speed=1.0, rotation="90_cw", flip_horizontal=True)
+        self.assertEqual(build_transform_filters(options), ["transpose=1", "hflip"])
+        graph = build_filter_graph(options)
+        self.assertIn("[0:v:0]transpose=1,hflip[v_transform]", graph.filter_complex)
+
+    def test_crop_uses_oriented_dimensions_after_rotation(self) -> None:
+        options = make_options(
+            speed=1.0,
+            source_width=1920,
+            source_height=1080,
+            rotation="90_cw",
+            crop={"x": 0.1, "y": 0.1, "w": 0.8, "h": 0.8},
+        )
+        # 90° swaps the frame to 1080×1920 before cropping.
+        pixels = compute_crop_pixels(options)
+        self.assertEqual(pixels, (864, 1536, 108, 192))
+        self.assertIn("crop=864:1536:108:192", build_crop_filter(options))
+
+    def test_crop_coordinates_are_even(self) -> None:
+        options = make_options(
+            speed=1.0,
+            source_width=1000,
+            source_height=600,
+            crop={"x": 0.1, "y": 0.1, "w": 0.333, "h": 0.333},
+        )
+        crop_w, crop_h, crop_x, crop_y = compute_crop_pixels(options)
+        for value in (crop_w, crop_h, crop_x, crop_y):
+            self.assertEqual(value % 2, 0)
+        self.assertEqual(crop_w, 332)
+        self.assertEqual(crop_h, 200)
+
+    def test_crop_is_clamped_inside_frame(self) -> None:
+        options = make_options(
+            speed=1.0,
+            source_width=1000,
+            source_height=1000,
+            crop={"x": 0.9, "y": 0.9, "w": 0.5, "h": 0.5},
+        )
+        crop_w, crop_h, crop_x, crop_y = compute_crop_pixels(options)
+        self.assertLessEqual(crop_x + crop_w, 1000)
+        self.assertLessEqual(crop_y + crop_h, 1000)
+        self.assertGreaterEqual(crop_x, 0)
+        self.assertGreaterEqual(crop_y, 0)
+
+    def test_crop_requires_source_dimensions(self) -> None:
+        options = make_options(
+            speed=1.0,
+            source_width=0,
+            source_height=0,
+            crop={"x": 0, "y": 0, "w": 0.5, "h": 0.5},
+        )
+        with self.assertRaises(FFmpegBuildError):
+            compute_crop_pixels(options)
+
+    def test_pipeline_order_is_subtitles_concat_transform_crop_speed(self) -> None:
+        options = make_options(
+            speed=2.0,
+            segments=[{"start": 1, "end": 3}, {"start": 5, "end": 7}],
+            subtitle_path="/media/movie.srt",
+            rotation="90_cw",
+            flip_horizontal=True,
+            crop={"x": 0.1, "y": 0.1, "w": 0.6, "h": 0.6},
+        )
+        graph = build_filter_graph(options)
+        order = [
+            graph.filter_complex.index("subtitles="),
+            graph.filter_complex.index("trim=start=1"),
+            graph.filter_complex.index("concat="),
+            graph.filter_complex.index("transpose=1"),
+            graph.filter_complex.index("crop="),
+            graph.filter_complex.index("setpts=PTS/2"),
+            graph.filter_complex.index("atempo=2"),
+        ]
+        self.assertEqual(order, sorted(order))
+        self.assertEqual(graph.video_label, "v_speed")
+        self.assertEqual(graph.audio_label, "a_speed")
 
 
 class CommandTests(unittest.TestCase):

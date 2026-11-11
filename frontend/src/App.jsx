@@ -177,7 +177,7 @@ export default function App() {
         setCurrentTime(0)
         setSettings((previous) => ({
           ...previous,
-          rotation: 'none',
+          rotation: meta.suggested_rotation || 'none',
           flipHorizontal: false,
           segments: [],
           subtitlePath: match ? match.path : '',
@@ -341,6 +341,7 @@ export default function App() {
             metadata={metadata}
             settings={settings}
             onBrowseSource={() => setBrowser({ mode: 'source' })}
+            onChange={updateSettings}
             onTimeUpdate={setCurrentTime}
             currentTime={currentTime}
             videoRef={videoRef}

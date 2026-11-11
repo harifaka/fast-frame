@@ -58,6 +58,10 @@ class RenderOptions:
     # Optional 1x subtitle burn-in applied before trimming.
     subtitle_path: str | None = None
     subtitle_font_size: int = 24
+    # Visual transforms applied after trim/concat and before the speed change.
+    rotation: str = "none"
+    flip_horizontal: bool = False
+    crop: dict[str, float] | None = None
 
     @property
     def encoder(self) -> str:
@@ -212,6 +216,86 @@ def build_subtitle_filter(options: RenderOptions) -> str | None:
     )
 
 
+ROTATION_FILTERS: dict[str, list[str]] = {
+    "none": [],
+    "90_cw": ["transpose=1"],
+    "90_ccw": ["transpose=2"],
+    "180": ["transpose=1", "transpose=1"],
+}
+
+
+def oriented_dimensions(width: int, height: int, rotation: str) -> tuple[int, int]:
+    """Dimensions after rotation (90°/270° swap width and height)."""
+
+    if rotation in {"90_cw", "90_ccw"}:
+        return height, width
+    return width, height
+
+
+def build_transform_filters(options: RenderOptions) -> list[str]:
+    if options.rotation not in ROTATION_FILTERS:
+        raise FFmpegBuildError(f"Unsupported rotation: {options.rotation}")
+    filters = list(ROTATION_FILTERS[options.rotation])
+    if options.flip_horizontal:
+        filters.append("hflip")
+    return filters
+
+
+def _even(value: int) -> int:
+    return int(value) - (int(value) % 2)
+
+
+def compute_crop_pixels(options: RenderOptions) -> tuple[int, int, int, int] | None:
+    """Convert the normalised crop rectangle into even pixel coordinates.
+
+    Rotation happens before cropping, so the frame dimensions used here are the
+    *oriented* ones. yuv420p needs even width, height and offsets for clean
+    chroma alignment.
+    """
+
+    crop = options.crop
+    if not crop:
+        return None
+
+    frame_width, frame_height = oriented_dimensions(
+        int(options.source_width or 0), int(options.source_height or 0), options.rotation
+    )
+    if frame_width <= 0 or frame_height <= 0:
+        raise FFmpegBuildError("Source dimensions are required to compute a crop")
+
+    try:
+        x = float(crop["x"])
+        y = float(crop["y"])
+        w = float(crop["w"])
+        h = float(crop["h"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise FFmpegBuildError("Crop needs numeric x, y, w and h values") from exc
+
+    x = min(max(x, 0.0), 1.0)
+    y = min(max(y, 0.0), 1.0)
+    w = min(max(w, 0.0), 1.0 - x)
+    h = min(max(h, 0.0), 1.0 - y)
+
+    crop_w = min(_even(round(w * frame_width)), _even(frame_width))
+    crop_h = min(_even(round(h * frame_height)), _even(frame_height))
+    if crop_w < 2 or crop_h < 2:
+        raise FFmpegBuildError("Crop region is too small")
+
+    crop_x = _even(round(x * frame_width))
+    crop_y = _even(round(y * frame_height))
+    crop_x = max(0, min(crop_x, frame_width - crop_w))
+    crop_y = max(0, min(crop_y, frame_height - crop_h))
+    return crop_w, crop_h, crop_x, crop_y
+
+
+def build_crop_filter(options: RenderOptions) -> str | None:
+    pixels = compute_crop_pixels(options)
+    if pixels is None:
+        return None
+    crop_w, crop_h, crop_x, crop_y = pixels
+    return f"crop={crop_w}:{crop_h}:{crop_x}:{crop_y}"
+
+
 def build_filter_graph(options: RenderOptions) -> FilterGraph:
     """Create the video/audio filter graph for the requested transforms.
 
@@ -259,6 +343,16 @@ def build_filter_graph(options: RenderOptions) -> FilterGraph:
             statements.append(f"{inputs}concat=n={count}:v=1:a=0[v_cat]")
             video_label = "v_cat"
         timing_changed = True
+
+    transforms = build_transform_filters(options)
+    if transforms:
+        statements.append(f"[{video_label}]{','.join(transforms)}[v_transform]")
+        video_label = "v_transform"
+
+    crop_filter = build_crop_filter(options)
+    if crop_filter:
+        statements.append(f"[{video_label}]{crop_filter}[v_crop]")
+        video_label = "v_crop"
 
     if abs(speed - 1.0) > _EPSILON:
         statements.append(f"[{video_label}]setpts=PTS/{_format_number(speed)}[v_speed]")

@@ -258,6 +258,10 @@ class JobManager:
                     speed=speed,
                     source_duration=metadata["duration"],
                     segments=options.get("segments") or [],
+                    source_width=metadata["width"],
+                    source_height=metadata["height"],
+                    rotation=options.get("rotation") or "none",
+                    crop=options.get("crop"),
                 )
             ),
             "progress": {
@@ -395,6 +399,9 @@ class JobManager:
                 segments=options.get("segments") or [],
                 subtitle_path=options.get("subtitle_path"),
                 subtitle_font_size=int(options.get("subtitle_font_size") or 24),
+                rotation=options.get("rotation") or "none",
+                flip_horizontal=bool(options.get("flip_horizontal")),
+                crop=options.get("crop"),
             )
             return ffmpeg_builder.build_ffmpeg_command(render_options)
 

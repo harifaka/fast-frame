@@ -95,4 +95,32 @@ This file records every non-obvious architectural decision made while implementi
     segments are stored in settings (and later in presets); uncommitted markers do
     not leak into renders or saved presets.
 
+## Phase 4 — Rotation & interactive crop
+
+25. **Rotation is applied via `transpose` and consumes the file's display matrix
+    default.** The UI pre-selects `suggested_rotation` from the probe result, and
+    `-noautorotate` guarantees the render matches the preview exactly (verified:
+    90° CW render is 180×320 portrait for a 640×360 source).
+26. **Crop math uses the oriented frame.** Since cropping happens after rotation,
+    width/height are swapped for `90_cw`/`90_ccw` before converting the normalised
+    rectangle. Width, height and both offsets are rounded down to even numbers and
+    clamped inside the frame, so yuv420p chroma alignment stays valid for every
+    preset. A 1:1 preset on a 360×640 portrait frame renders exactly 324×324.
+27. **The preview stage is measured in JS.** A `ResizeObserver` fits a box with the
+    oriented aspect ratio; for 90° rotations the `<video>` element is sized by the
+    reciprocal ratio and rotated about its centre, so the crop overlay's normalised
+    coordinates map 1:1 to rendered pixels.
+28. **Crop overlay uses normalized coordinates and pointer capture.** Dragging the
+    box moves it; corner handles scale it with an optional aspect lock (16:9, 9:16,
+    1:1) and a 5% minimum size. Presets re-fit a centred maximum box instead of
+    distorting the current one.
+29. **Burned subtitles rotate with the video.** `ROADMAP.md` fixes the pipeline
+    order as subtitles → trim → rotate/flip → crop → speed, so subtitle text is part
+    of the frame when rotation happens. Users who need upright text can render
+    without rotation metadata or pre-rotate the file; this is intentional per spec.
+30. **Transform/crop state lives with the render settings.** It is sent with every
+    job (and will be captured in presets), so the render always mirrors what the
+    preview shows.
+
+
 
