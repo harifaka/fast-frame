@@ -28,7 +28,7 @@ The goal is to build a Dockerized, web-based video processing application utiliz
 
 ---
 
-### 3. The 7-Phase Iterative Development Plan (Step-by-Step)
+### 3. The 8-Phase Iterative Development Plan (Step-by-Step)
 
 | Phase | Scope | Status |
 | --- | --- | --- |
@@ -39,6 +39,7 @@ The goal is to build a Dockerized, web-based video processing application utiliz
 | 5 | Render queue, presets & fault tolerance | ✅ Implemented |
 | 6 | Focus-mode layout: configuration drawer & always-on render bar | ✅ Implemented |
 | 7 | Auto-mounted host drives, network/SMB sources & slim multi-stage image | 🚧 Current |
+| 8 | Insta360 `.insp` support & mock AI view selector (MCP-ready) | 🚧 Current |
 
 Each phase lists the tasks it delivered and its definition of done; completed phases are
 kept as the reference specification for the behaviour that must not regress.
@@ -188,6 +189,27 @@ Running `docker compose up --build -d` builds the slim image (~240 MB compressed
 
 ---
 
+#### 🔮 PHASE 8: Insta360 `.insp` File Support & Mock AI View Selector (MCP-Ready) 🚧
+**Goal:** Add support for Insta360 `.insp` container files with a neutral rectilinear preview mode and a mocked AI View Selector in the UI, designed to be controlled remotely via Model Context Protocol (MCP) by external AI agents for intelligent framing, tracking, and zoom.
+
+**Tasks (Backend & Services):**
+1. **`.insp` Format Handler / Demuxer (`backend/services/insp_service.py`):**
+   - Insta360 `.insp` files are typically single-frame or dual-fisheye equirectangular container JPEGs/MP4-likes.
+   - Implement metadata and stream inspection via `ffprobe` / Pillow so `.insp` files can be selected, previewed in a neutral equirectangular/rectilinear projection view, and fed directly into the FFmpeg rendering pipeline without manual extraction.
+2. **AI View Selector Service & Mock State (`backend/services/ai_view_service.py`):**
+   - Provide a backend state manager storing AI framing directives (e.g., target pan, tilt, zoom, subject tracking keyframes, crop window).
+   - Expose REST / WebSocket endpoints (`/api/ai/view-state`, `/api/ai/mcp-command`) allowing external MCP agents to query and adjust framing parameters dynamically.
+
+**Tasks (Frontend):**
+1. **Neutral View Selector Widget in `VideoWorkspace.jsx`:**
+   - A toggleable minimalist UI overlay when an `.insp` or 360° source is loaded, showing a neutral framing viewport (mock AI view selector with pan/tilt/zoom preview indicators).
+   - Visual indicators showing that AI framing / subject tracking mode is active (ready for MCP control).
+
+**Phase 8 Definition of Done:**
+`.insp` files are successfully recognized and listed in the file browser, open in a neutral preview mode, and the UI exposes the mock AI view selector state which can be updated via backend API endpoints.
+
+---
+
 ### 4. Target Project Directory Structure
 
 ```text
@@ -212,6 +234,8 @@ fast-frame/
 │   │   ├── ffmpeg_builder.py   # Filter_complex, NVENC, atempo, multi-cut command builder
 │   │   ├── ffprobe_service.py  # Video metadata extractor (local & URL)
 │   │   ├── gpu_service.py      # nvidia-smi & NVENC encoder detection with CPU fallback
+│   │   ├── insp_service.py     # Insta360 .insp demuxer & equirectangular/rectilinear preview metadata
+│   │   ├── ai_view_service.py  # AI framing state manager + /api/ai REST & WebSocket (MCP bridge)
 │   │   ├── network_service.py  # SMB/CIFS & smbprotocol zero-copy handler
 │   │   └── worker.py           # Async background FFmpeg runner & progress parser
 │   └── tests/                  # Command builder, queue helper, network & host-mount tests
@@ -226,7 +250,8 @@ fast-frame/
             ├── FileBrowser.jsx     # Host Drives (with Quick Drive bar) + Network/SMB/URL modal
             ├── FileEntryList.jsx   # Shared entry list for the Host Drives and Network tabs
             ├── NetworkPanel.jsx    # Direct URL & Windows/NAS SMB share connection UI
-            ├── VideoWorkspace.jsx  # Video player preview, Crop overlay, Multi-Cut timeline
+            ├── VideoWorkspace.jsx  # Video player preview, Crop overlay, Multi-Cut timeline, AI view selector overlay
+            ├── AIViewSelector.jsx  # Toggleable neutral framing viewport (pan/tilt/zoom) for .insp / 360° sources
             ├── ControlPanel.jsx    # Slide-over Configuration drawer (Presets, Source, Speed, Encoding, Subtitles)
             └── RenderQueue.jsx     # Live progress bar & Batch queue drawer
 ```
