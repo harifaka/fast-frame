@@ -47,6 +47,8 @@ async def get_job(job_id: str) -> dict:
 
 @router.delete("/{job_id}")
 async def cancel_job(job_id: str) -> dict:
+    """Cancel a queued/running job, or dismiss a finished one from the history."""
+
     try:
         return await job_manager.cancel(job_id)
     except JobNotFoundError as exc:

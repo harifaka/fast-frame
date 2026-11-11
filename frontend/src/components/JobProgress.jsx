@@ -8,6 +8,7 @@ import {
   Gauge,
   HardDriveDownload,
   Loader2,
+  X,
   XCircle,
 } from 'lucide-react'
 import { formatBytes, formatClock, formatEta } from '../utils'
@@ -21,7 +22,7 @@ const STATUS_META = {
   cancelled: { label: 'Cancelled', tone: 'text-slate-400', ring: 'border-white/10', icon: Ban },
 }
 
-export default function JobProgress({ job, onCancel, showLog = true }) {
+export default function JobProgress({ job, onCancel, onDismiss, position, showLog = true }) {
   const [logOpen, setLogOpen] = useState(false)
   if (!job) return null
 
@@ -31,6 +32,8 @@ export default function JobProgress({ job, onCancel, showLog = true }) {
   const percent = Math.max(0, Math.min(100, Number(progress.percent) || 0))
   const isActive = job.status === 'processing' || job.status === 'cancelling'
   const canCancel = job.status === 'queued' || job.status === 'processing'
+  const canDismiss =
+    job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled'
 
   return (
     <div className={`rounded-xl border ${meta.ring} bg-studio-950/60 p-3`}>
@@ -44,6 +47,7 @@ export default function JobProgress({ job, onCancel, showLog = true }) {
           <div className="flex items-baseline justify-between gap-2">
             <span className={`text-[11px] font-semibold uppercase tracking-wider ${meta.tone}`}>
               {meta.label}
+              {typeof position === 'number' ? ` · #${position}` : ''}
             </span>
             <span className="font-mono text-[11px] text-slate-400">
               {percent.toFixed(1)}%
@@ -59,15 +63,17 @@ export default function JobProgress({ job, onCancel, showLog = true }) {
             <div className="mt-0.5 text-[10px] text-amber-300">{job.fallback_reason}</div>
           )}
         </div>
-        {canCancel && onCancel && (
+        {(canCancel || canDismiss) && (
           <button
             type="button"
-            onClick={() => onCancel(job.id)}
+            onClick={() => (canCancel ? onCancel?.(job.id) : onDismiss?.(job.id))}
             className="rounded-md p-1 text-slate-500 transition hover:bg-red-500/10 hover:text-red-300"
-            title="Cancel render"
-            aria-label="Cancel render"
+            title={canCancel ? 'Cancel render' : 'Remove from history'}
+            aria-label={
+              canCancel ? `Cancel ${job.output_filename}` : `Dismiss ${job.output_filename}`
+            }
           >
-            <Ban className="h-3.5 w-3.5" />
+            {canCancel ? <Ban className="h-3.5 w-3.5" /> : <X className="h-3.5 w-3.5" />}
           </button>
         )}
       </div>

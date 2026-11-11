@@ -122,5 +122,32 @@ This file records every non-obvious architectural decision made while implementi
     job (and will be captured in presets), so the render always mirrors what the
     preview shows.
 
+## Phase 5 — Batch queue, presets & polish
+
+31. **DELETE semantics are split by state.** A queued/running job is cancelled (the
+    FFmpeg process is terminated, the partial file removed); a finished job is
+    dismissed from the in-memory history. `POST /api/queue/clear-completed` clears
+    all finished entries at once and broadcasts a fresh snapshot.
+32. **`render_now` jumps the queue but never pre-empts the running job.** The GPU
+    renders strictly one job at a time to avoid NVENC session exhaustion; “Render
+    Now” inserts at the front of the pending list.
+33. **Batch = repeated Add to Queue.** Every job snapshots its own settings at
+    enqueue time, so three videos with different cuts/crops/speeds can be lined up
+    and processed sequentially without the UI state affecting earlier jobs.
+34. **Presets store transferable settings only** — speed, codec, subtitle font size
+    and GPU preference. Segments, subtitle path, rotation, crop and filename are
+    video-specific and stay out of presets to avoid silently applying the wrong
+    geometry to another file. Built-in presets cannot be deleted; user presets can.
+35. **Queue state is intentionally in-memory.** History is a runtime concern; it is
+    cleared on container restart while rendered files remain on disk. This avoids a
+    database dependency for a single-user studio app and is documented in the README.
+36. **The queue UI is a right-side drawer.** It reuses the same `JobProgress` card as
+    the control panel, so progress, FPS, speed, ETA, fallback notes, output size and
+    expandable FFmpeg logs look identical in both places.
+37. **README documents the real deployment matrix** — Windows `D:/:/mnt/host/d`,
+    Linux `/media:/mnt/host/media`, `gpus: all` vs the `deploy.resources` fallback,
+    GPU verification with `nvidia-smi`, CPU mode, permissions and troubleshooting.
+
+
 
 

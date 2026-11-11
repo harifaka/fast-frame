@@ -7,6 +7,7 @@ import FileBrowser from './components/FileBrowser'
 import VideoWorkspace from './components/VideoWorkspace'
 import ControlPanel from './components/ControlPanel'
 import Timeline from './components/Timeline'
+import RenderQueue from './components/RenderQueue'
 
 const DEFAULT_SETTINGS = {
   speed: 1,
@@ -49,6 +50,7 @@ export default function App() {
   const [submitting, setSubmitting] = useState(false)
   const [subtitleFiles, setSubtitleFiles] = useState([])
   const [subtitlesLoading, setSubtitlesLoading] = useState(false)
+  const [queueOpen, setQueueOpen] = useState(false)
 
   const updateSettings = useCallback(
     (patch) => {
@@ -258,6 +260,7 @@ export default function App() {
           type: 'success',
           message: `${renderNow ? 'Rendering' : 'Queued'} ${job.output_filename}`,
         })
+        if (!renderNow) setQueueOpen(true)
       } catch (error) {
         setNotice({ type: 'error', message: error.message })
       } finally {
@@ -273,6 +276,27 @@ export default function App() {
       jobStatusRef.current.set(job.id, job.status)
       setJobs((previous) =>
         previous.map((existing) => (existing.id === job.id ? job : existing)),
+      )
+    } catch (error) {
+      setNotice({ type: 'error', message: error.message })
+    }
+  }, [])
+
+  const dismissJob = useCallback(async (jobId) => {
+    try {
+      await api.cancelJob(jobId)
+      jobStatusRef.current.delete(jobId)
+      setJobs((previous) => previous.filter((job) => job.id !== jobId))
+    } catch (error) {
+      setNotice({ type: 'error', message: error.message })
+    }
+  }, [])
+
+  const clearCompleted = useCallback(async () => {
+    try {
+      await api.clearCompleted()
+      setJobs((previous) =>
+        previous.filter((job) => !['completed', 'failed', 'cancelled'].includes(job.status)),
       )
     } catch (error) {
       setNotice({ type: 'error', message: error.message })
@@ -309,6 +333,8 @@ export default function App() {
         wsStatus={wsStatus}
         queuedCount={queuedCount}
         activeCount={activeCount}
+        queueOpen={queueOpen}
+        onToggleQueue={() => setQueueOpen((value) => !value)}
       />
 
       {notice && (
@@ -399,6 +425,16 @@ export default function App() {
         }}
         videoExtensions={appConfig?.video_extensions || ['.mp4', '.mkv', '.avi']}
         subtitleExtensions={appConfig?.subtitle_extensions || ['.srt']}
+      />
+
+      <RenderQueue
+        open={queueOpen}
+        jobs={jobs}
+        wsStatus={wsStatus}
+        onClose={() => setQueueOpen(false)}
+        onCancel={cancelJob}
+        onDismiss={dismissJob}
+        onClearCompleted={clearCompleted}
       />
     </div>
   )

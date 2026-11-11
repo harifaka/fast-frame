@@ -33,7 +33,8 @@ PROGRESS_EMIT_INTERVAL = 0.25
 TERMINATE_GRACE_SECONDS = 8.0
 MAX_ERROR_LOG_CHARS = 12000
 
-_INVALID_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+_INVALID_FILENAME = re.compile(r'[<>:"/\\|?*]')
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 
 NVENC_FAILURE_MARKERS = (
     "nvenc",
@@ -86,8 +87,11 @@ class EventBus:
 
 
 def sanitize_filename(name: str, fallback: str = "output") -> str:
-    cleaned = _INVALID_FILENAME.sub("_", str(name or "")).strip().strip(".")
-    return cleaned or fallback
+    cleaned = _CONTROL_CHARS.sub("", str(name or ""))
+    cleaned = _INVALID_FILENAME.sub("_", cleaned).strip().strip(".")
+    if cleaned in {"", ".", ".."}:
+        return fallback
+    return cleaned
 
 
 def default_output_name(source_name: str, speed: float, codec: str) -> str:
@@ -302,6 +306,12 @@ class JobManager:
         job = self._jobs.get(job_id)
         if job is None:
             raise JobNotFoundError(job_id)
+
+        if job["status"] in {"completed", "failed", "cancelled"}:
+            # Dismiss a finished job from the queue history.
+            self._jobs.pop(job_id, None)
+            await self.bus.publish({"type": "snapshot", **self.snapshot()})
+            return copy.deepcopy(job)
 
         if job["status"] == "queued":
             self._pending = [pending for pending in self._pending if pending != job_id]

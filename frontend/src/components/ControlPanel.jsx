@@ -1,5 +1,6 @@
 import {
   AudioLines,
+  Bookmark,
   Captions,
   Clock,
   Cpu,
@@ -8,12 +9,16 @@ import {
   Gauge,
   HardDrive,
   Info,
+  Plus,
   RefreshCw,
   Rocket,
+  Save,
   Scissors,
   Sparkles,
+  Trash2,
   Zap,
 } from 'lucide-react'
+import { useState } from 'react'
 import { formatBytes, formatClock, formatSpeed } from '../utils'
 import JobProgress from './JobProgress'
 
@@ -23,6 +28,33 @@ const FONT_SIZES = [
   { id: 'medium', label: 'Medium', value: 24 },
   { id: 'large', label: 'Large', value: 32 },
 ]
+const PRESET_STORAGE_KEY = 'fastframe.presets'
+const BUILTIN_PRESETS = [
+  {
+    id: 'builtin-fast-review',
+    name: 'Fast Review (1.5x HEVC)',
+    builtin: true,
+    settings: { speed: 1.5, codec: 'hevc', subtitleFontSize: 24, preferGpu: true },
+  },
+  {
+    id: 'builtin-2x-h264',
+    name: '2x Speedup (H.264)',
+    builtin: true,
+    settings: { speed: 2, codec: 'h264', subtitleFontSize: 24, preferGpu: true },
+  },
+]
+
+function readUserPresets() {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(PRESET_STORAGE_KEY) || '[]')
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(
+      (preset) => preset && typeof preset.id === 'string' && typeof preset.name === 'string',
+    )
+  } catch {
+    return []
+  }
+}
 
 function Stat({ label, value }) {
   return (
@@ -65,8 +97,151 @@ export default function ControlPanel({
   const outputDuration =
     keptDuration > 0 ? keptDuration / speed : ((metadata?.duration || 0) / speed)
 
+  const [userPresets, setUserPresets] = useState(readUserPresets)
+  const [selectedPreset, setSelectedPreset] = useState('')
+  const [saveOpen, setSaveOpen] = useState(false)
+  const [presetName, setPresetName] = useState('')
+  const [presetError, setPresetError] = useState(null)
+
+  const allPresets = [...BUILTIN_PRESETS, ...userPresets]
+  const activePreset = allPresets.find((preset) => preset.id === selectedPreset) || null
+  const canDeletePreset = Boolean(activePreset && !activePreset.builtin)
+
+  const applyPreset = () => {
+    if (!activePreset) return
+    onChange({ ...activePreset.settings })
+    setPresetError(null)
+  }
+
+  const savePreset = () => {
+    const name = presetName.trim()
+    if (!name) {
+      setPresetError('Give the preset a name first.')
+      return
+    }
+    const preset = {
+      id: `preset-${Date.now()}`,
+      name,
+      settings: {
+        speed: Number(settings.speed) || 1,
+        codec: settings.codec,
+        subtitleFontSize: Number(settings.subtitleFontSize) || 24,
+        preferGpu: settings.preferGpu !== false,
+      },
+    }
+    const next = [...userPresets.filter((item) => item.name.toLowerCase() !== name.toLowerCase()), preset]
+    setUserPresets(next)
+    window.localStorage.setItem(PRESET_STORAGE_KEY, JSON.stringify(next))
+    setSelectedPreset(preset.id)
+    setPresetName('')
+    setSaveOpen(false)
+    setPresetError(null)
+  }
+
+  const deletePreset = () => {
+    if (!canDeletePreset) return
+    const next = userPresets.filter((preset) => preset.id !== selectedPreset)
+    setUserPresets(next)
+    window.localStorage.setItem(PRESET_STORAGE_KEY, JSON.stringify(next))
+    setSelectedPreset('')
+  }
+
   return (
     <div className="flex flex-col gap-4">
+      <section className="panel">
+        <div className="panel-header">
+          <div className="panel-title">
+            <Bookmark className="h-3.5 w-3.5 text-indigo-400" />
+            Presets
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setSaveOpen((value) => !value)
+              setPresetError(null)
+            }}
+            className="text-[11px] font-medium text-accent-400 hover:text-accent-300"
+          >
+            {saveOpen ? 'Cancel' : 'Save current'}
+          </button>
+        </div>
+        <div className="space-y-2 p-4">
+          <div className="flex gap-1.5">
+            <select
+              className="field text-xs"
+              value={selectedPreset}
+              onChange={(event) => {
+                setSelectedPreset(event.target.value)
+                setPresetError(null)
+              }}
+              aria-label="Saved presets"
+            >
+              <option value="">Choose a preset…</option>
+              <optgroup label="Built-in">
+                {BUILTIN_PRESETS.map((preset) => (
+                  <option key={preset.id} value={preset.id}>
+                    {preset.name}
+                  </option>
+                ))}
+              </optgroup>
+              {userPresets.length > 0 && (
+                <optgroup label="Saved">
+                  {userPresets.map((preset) => (
+                    <option key={preset.id} value={preset.id}>
+                      {preset.name}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+            </select>
+            <button
+              type="button"
+              onClick={applyPreset}
+              disabled={!activePreset}
+              className="btn-primary !px-3 !py-1.5 !text-xs"
+            >
+              Apply
+            </button>
+            <button
+              type="button"
+              onClick={deletePreset}
+              disabled={!canDeletePreset}
+              className="btn-ghost !px-2 !py-1.5"
+              title="Delete the selected saved preset"
+              aria-label="Delete preset"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          </div>
+
+          {saveOpen && (
+            <div className="flex gap-1.5">
+              <input
+                className="field text-xs"
+                placeholder="Preset name"
+                value={presetName}
+                onChange={(event) => setPresetName(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') savePreset()
+                }}
+                aria-label="Preset name"
+              />
+              <button type="button" onClick={savePreset} className="btn-primary !px-3 !py-1.5 !text-xs">
+                <Save className="h-3.5 w-3.5" />
+                Save
+              </button>
+            </div>
+          )}
+
+          {presetError && <p className="text-[10px] text-amber-300">{presetError}</p>}
+
+          <p className="text-[10px] leading-relaxed text-slate-600">
+            Presets store speed, codec and subtitle size. Cuts, rotation and crop stay tied to the
+            current video.
+          </p>
+        </div>
+      </section>
+
       <section className="panel">
         <div className="panel-header">
           <div className="panel-title">
@@ -389,15 +564,27 @@ export default function ControlPanel({
         <div className="space-y-3 p-4">
           {activeJob && <JobProgress job={activeJob} onCancel={onCancelJob} />}
 
-          <button
-            type="button"
-            onClick={() => onSubmit({ renderNow: true })}
-            disabled={!canRender || submitting}
-            className="btn-primary w-full !py-2.5"
-          >
-            <Rocket className={`h-4 w-4 ${submitting ? 'animate-bounce' : ''}`} />
-            Render Now
-          </button>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => onSubmit({ renderNow: true })}
+              disabled={!canRender || submitting}
+              className="btn-primary !py-2.5"
+            >
+              <Rocket className={`h-4 w-4 ${submitting ? 'animate-bounce' : ''}`} />
+              Render Now
+            </button>
+            <button
+              type="button"
+              onClick={() => onSubmit({ renderNow: false })}
+              disabled={!canRender || submitting}
+              className="btn-ghost !py-2.5"
+              title="Queue this render behind the active job"
+            >
+              <Plus className="h-4 w-4" />
+              Add to Queue
+            </button>
+          </div>
 
           {!canRender && (
             <p className="text-center text-[10px] text-slate-600">
