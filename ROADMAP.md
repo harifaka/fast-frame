@@ -3,7 +3,8 @@
 ## Development Roadmap & Specification
 
 **Status:** Phases 1–6 are implemented, verified and committed. Phase 7 is the
-current (and final) phase.
+current phase; Phase 8 (Insta360 `.insp` support & mock AI view selector) is the
+next planned phase.
 
 ### 1. Project Overview & Core Principles
 The goal is to build a Dockerized, web-based video processing application utilizing NVIDIA RTX 3060 (NVENC) GPU acceleration.
@@ -39,7 +40,7 @@ The goal is to build a Dockerized, web-based video processing application utiliz
 | 5 | Render queue, presets & fault tolerance | ✅ Implemented |
 | 6 | Focus-mode layout: configuration drawer & always-on render bar | ✅ Implemented |
 | 7 | Auto-mounted host drives, network/SMB sources & slim multi-stage image | 🚧 Current |
-| 8 | Insta360 `.insp` support & mock AI view selector (MCP-ready) | 🚧 Current |
+| 8 | Insta360 `.insp` support & mock AI view selector (MCP-ready) | 🚧 Planned |
 
 Each phase lists the tasks it delivered and its definition of done; completed phases are
 kept as the reference specification for the behaviour that must not regress.
