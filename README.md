@@ -170,6 +170,32 @@ and `+ Add to Queue` are repeated in the drawer footer.
 Keyboard shortcuts: `Space` play/pause, `←`/`→` seek ±5 s, `M` mute, `Esc` close the configuration
 drawer.
 
+### Network sources: direct URLs & SMB/NAS shares
+
+The `Browse files` modal has two tabs: **📁 Host Drives** (the classic zero-copy browser) and
+**🌐 Network / NAS / URL**.
+
+- **Direct video URL** — paste an `http(s)://`, `rtsp://` or WebDAV (`webdav://`, `webdavs://`) link
+  and press **Load Network Stream**. The URL is validated with `ffprobe` and rendered straight from
+  `-i <url>` with `-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5`
+  (`-rtsp_transport tcp` for RTSP) so a dropped connection does not kill the job. Nothing is
+  downloaded first. HTTP/WebDAV sources preview through `/api/video/stream?url=…` (Range is passed
+  through); RTSP/RTMP sources can be rendered but not previewed in a browser.
+- **SMB / NAS share** — enter `//192.168.1.100/videos`, `\\SERVER\Share` or `smb://server/share`
+  (credentials optional) and press **Connect**. The share is exposed at
+  `/mnt/host/network/<share>` and can be used for **both** the source video and the destination
+  folder.
+  - If the container may create kernel mounts (`cap_add: [SYS_ADMIN]`, see `docker-compose.yml`)
+    `mount.cifs` is used and the share behaves like a local drive.
+  - Otherwise the bundled `smbprotocol` client is used: browsing and preview read byte ranges on
+    demand, and FFmpeg consumes the file through a loopback relay
+    (`/api/fs/network-stream`), so the source is still never copied. Renders are staged locally and
+    uploaded to the share as soon as the encode finishes.
+  - Windows mapped drives (`Z:`, `Y:`, …) that are bind-mounted into the container are ordinary
+    host drives and appear under **📁 Host Drives**.
+- Recent URLs and share bookmarks are kept in LocalStorage for one-click reconnect. Passwords are
+  never stored: they live in backend memory only and are never returned by the API.
+
 > The queue lives in memory: restarting the container clears the job list (rendered files stay on
 > disk). Presets and the last destination folder are stored in your browser's LocalStorage.
 
@@ -218,8 +244,14 @@ Details worth knowing:
 | GET | `/api/system/gpu-check?refresh=true` | GPU name/driver, NVENC availability, CPU fallback encoders |
 | GET | `/api/system/config` | Extensions, speed range, font sizes, codecs |
 | GET | `/api/fs/list?path=…` | Directory listing (folders + videos + `.srt`), breadcrumbs |
+| GET | `/api/fs/network-mounts` | Connected SMB/NAS locations + SMB client availability |
+| POST | `/api/fs/network-mount` | Connect a share (`{ path, username?, password?, name? }`) |
+| DELETE | `/api/fs/network-mount/{id}` | Disconnect a share |
+| GET | `/api/fs/network-stream?path=…` | Loopback relay FFmpeg uses for non-mounted shares |
 | GET | `/api/video/metadata?path=…` | Duration, resolution, FPS, codec, audio, rotation |
+| GET | `/api/video/metadata?url=…` | Same, probed directly from a network URL |
 | GET | `/api/video/stream?path=…` | HTTP 206 byte-range streaming (seekable `<video>`) |
+| GET | `/api/video/stream?url=…` | Proxy a remote HTTP/WebDAV stream (Range preserved) |
 | POST | `/api/queue/add` | Queue/render a job (`render_now: true` jumps the queue) |
 | GET | `/api/queue` | Jobs, processing id, queue depth |
 | DELETE | `/api/queue/{id}` | Cancel queued/running job or dismiss a finished one |

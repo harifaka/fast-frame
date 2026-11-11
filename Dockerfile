@@ -9,10 +9,12 @@ ENV DEBIAN_FRONTEND=noninteractive \
     HOST_MOUNT_PATH=/mnt/host \
     PATH="/opt/venv/bin:$PATH"
 
-# ffmpeg (with NVENC + libass for subtitle burn-in), Python 3.11 and Node 20.
+# ffmpeg (with NVENC + libass for subtitle burn-in), cifs-utils for kernel SMB
+# mounts, Python 3.11 and Node 20.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
+        cifs-utils \
         curl \
         ffmpeg \
         gnupg \

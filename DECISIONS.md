@@ -168,3 +168,42 @@ This file records every non-obvious architectural decision made while implementi
 
 
 
+
+## Phase 6 — Network sources: direct URLs & SMB/NAS shares
+
+38. **URLs bypass the path sandbox instead of being downloaded.** `config.is_network_url`
+    recognises http/https/rtsp/rtmp/WebDAV schemes; those inputs skip
+    `resolve_host_path` and reach `ffprobe`/`ffmpeg` verbatim as `-i <url>`. Nothing is
+    copied to disk first, which is what made the zero-copy promise hold for streams.
+39. **Reconnect flags are injected by one helper.** `config.network_input_args` returns
+    the input arguments for both ffprobe and ffmpeg, adding
+    `-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5` for HTTP/WebDAV and
+    `-rtsp_transport tcp` for RTSP. A dropped Wi-Fi link therefore stalls a render
+    instead of failing it.
+40. **WebDAV is translated, not advertised.** ffmpeg has no `webdav://` protocol, so
+    `webdav(s)://` and `dav(s)://` are rewritten to http(s) for ffmpeg while the UI keeps
+    the user's original URL. Browser credentials embedded in the URL become a Basic
+    auth header in the preview proxy and are masked (`user:***@host`) everywhere else.
+41. **SMB access is three-tiered, best first.** (a) `mount.cifs` when the container has
+    `CAP_SYS_ADMIN` › the share is a real path under `/mnt/host/network/<share>` and
+    every tool treats it like a drive; (b) the bundled `smbprotocol` client when it is
+    not › browsing and preview read byte ranges on demand; (c) a native Windows path
+    (`Z:`, `\\server\share`) that the host OS already resolves. Registered locations are
+    the only paths allowed to skip the host-root sandbox.
+42. **Non-mounted shares are relayed over loopback, not staged.** FFmpeg reads
+    `/api/fs/network-stream?path=…` on `127.0.0.1`, an async Range-capable relay backed by
+    the SMB client. Renders into such a share use a local staging file that is uploaded
+    when the encode finishes — writing directly to SMB is impossible for an encoder that
+    needs a seekable output, and this keeps the *source* copy-free.
+43. **Credentials never leave the process.** Passwords are held in memory on the location
+    object, stripped from every API response (`has_credentials` only), passed to
+    `mount.cifs` through a 0600 credentials file that is deleted right after the mount,
+    and redacted from FFmpeg commands and logs. LocalStorage bookmarks store the share
+    path and username only.
+44. **Output naming for streams reuses the existing rule.** `network_source_name` derives a
+    clean basename from the URL path (`stream_video.mp4`, `channel.m3u8` › `channel.mp4`,
+    no basename › `host_network_stream.mp4`) so the queue still produces
+    `<name>_<speed>x_<codec>.mp4` for URL sources.
+45. **The modal keeps one browse surface with two tabs.** `?? Host Drives` and
+    `?? Network / NAS / URL` share `FileEntryList`, so selection, double-click and
+    destination picking behave identically; only the source of the listing changes.

@@ -24,7 +24,7 @@ from config import (
     SUPPORTED_SPEED_MIN,
     VIDEO_EXTENSIONS,
 )
-from routers import filesystem, queue
+from routers import filesystem, network, queue
 from services.gpu_service import get_gpu_info
 from services.worker import event_bus, job_manager
 
@@ -45,7 +45,13 @@ async def lifespan(app: FastAPI):
         root.mkdir(parents=True, exist_ok=True)
     except OSError as exc:  # read-only or permission problem
         logger.warning("Could not create host mount %s: %s", root, exc)
+    network_root = config.network_root()
+    try:
+        network_root.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        logger.warning("Could not create network mount root %s: %s", network_root, exc)
     logger.info("Fast-Frame serving host mount %s", root)
+    logger.info("Network shares (SMB/CIFS) are registered under %s", network_root)
     await job_manager.start()
     logger.info("Render queue worker started")
     try:
@@ -77,6 +83,7 @@ app.add_middleware(
 )
 
 app.include_router(filesystem.router)
+app.include_router(network.router)
 app.include_router(queue.router)
 
 
@@ -148,6 +155,11 @@ async def system_config() -> dict:
         "speed": {"min": SUPPORTED_SPEED_MIN, "max": SUPPORTED_SPEED_MAX},
         "subtitle_font_sizes": SUBTITLE_FONT_SIZES,
         "default_subtitle_font_size": DEFAULT_SUBTITLE_FONT_SIZE,
+        "network": {
+            "enabled": True,
+            "root": str(config.network_root()),
+            "url_schemes": list(config.NETWORK_URL_SCHEMES),
+        },
         "codecs": [
             {"id": "h264", "label": "H.264 (max compatibility)"},
             {"id": "hevc", "label": "H.265 / HEVC (smaller, faster USB writes)"},

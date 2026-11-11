@@ -1,3 +1,5 @@
+import { isNetworkUrl } from './utils'
+
 const JSON_HEADERS = { 'Content-Type': 'application/json' }
 
 function buildQuery(params) {
@@ -56,8 +58,18 @@ export const api = {
   gpu: (refresh = false) => request(`/api/system/gpu-check${refresh ? '?refresh=true' : ''}`),
   config: () => request('/api/system/config'),
   list: (path) => request(`/api/fs/list${buildQuery({ path })}`),
-  metadata: (path) => request(`/api/video/metadata${buildQuery({ path })}`),
-  streamUrl: (path) => `/api/video/stream${buildQuery({ path })}`,
+  metadata: (target) =>
+    request(`/api/video/metadata${buildQuery(isNetworkUrl(target) ? { url: target } : { path: target })}`),
+  streamUrl: (target) =>
+    `/api/video/stream${buildQuery(isNetworkUrl(target) ? { url: target } : { path: target })}`,
+  networkMounts: () => request('/api/fs/network-mounts'),
+  mountNetwork: (payload) => request('/api/fs/network-mount', {
+    method: 'POST',
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload),
+  }),
+  unmountNetwork: (locationId) =>
+    request(`/api/fs/network-mount/${encodeURIComponent(locationId)}`, { method: 'DELETE' }),
   queue: () => request('/api/queue'),
   addToQueue: (payload) => request('/api/queue/add', {
     method: 'POST',

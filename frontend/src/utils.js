@@ -85,3 +85,22 @@ export function uid(prefix = 'id') {
   }
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
+
+const NETWORK_URL_PATTERN = /^(?:https?|rtsp|rtsps|rtmp|rtmps|webdavs?|davs?):\/\//i
+
+/** True for direct stream URLs that the backend reads without downloading. */
+export function isNetworkUrl(value) {
+  return typeof value === 'string' && NETWORK_URL_PATTERN.test(value.trim())
+}
+
+/** Schemes the browser <video> element can preview through the API proxy. */
+export function isPreviewableUrl(value) {
+  return typeof value === 'string' && /^(?:https?|webdavs?|davs?):\/\//i.test(value.trim())
+}
+
+export function formatModifiedDate(value) {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+}

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CircleAlert, X } from 'lucide-react'
 import { api, openProgressSocket } from './api'
-import { dirname, formatBytes, suggestOutputName } from './utils'
+import { dirname, formatBytes, isNetworkUrl, suggestOutputName } from './utils'
 import Header from './components/Header'
 import FileBrowser from './components/FileBrowser'
 import VideoWorkspace from './components/VideoWorkspace'
@@ -154,7 +154,7 @@ export default function App() {
   }, [handleProgressEvent])
 
   const loadSubtitles = useCallback(async (videoPath) => {
-    if (!videoPath) {
+    if (!videoPath || isNetworkUrl(videoPath)) {
       setSubtitleFiles([])
       return []
     }
@@ -198,7 +198,7 @@ export default function App() {
           filenameCustom: false,
           outputFilename: suggestOutputName(meta.name, previous.speed, previous.codec),
         }))
-        setTargetDir((previous) => previous || dirname(path))
+        setTargetDir((previous) => previous || (isNetworkUrl(path) ? previous : dirname(path)))
       } catch (error) {
         setNotice({ type: 'error', message: error.message })
       } finally {
@@ -329,7 +329,7 @@ export default function App() {
 
   const browserInitialPath =
     browser?.mode === 'source'
-      ? sourcePath
+      ? sourcePath && !isNetworkUrl(sourcePath)
         ? dirname(sourcePath)
         : appConfig?.host_root
       : targetDir || appConfig?.host_root

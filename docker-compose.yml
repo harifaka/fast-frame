@@ -12,15 +12,26 @@ services:
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,video,utility
       HOST_MOUNT_PATH: /mnt/host
+      # SMB/CIFS shares are mounted (or relayed) below this directory.
+      NETWORK_MOUNT_PATH: /mnt/host/network
+      # Loopback base URL used to hand non-mounted NAS files to ffmpeg/ffprobe.
+      FASTFRAME_INTERNAL_URL: http://127.0.0.1:8000
     volumes:
       # Portable default: anything dropped into ./media shows up under /mnt/host/media.
       - ./media:/mnt/host/media
+      # Kernel-level SMB mounts live here; a volume keeps them off your media folders.
+      - fast-frame-network:/mnt/host/network
       # Windows (Docker Desktop + WSL2) - map a whole drive:
       # - D:/:/mnt/host/d
       # Linux - map removable / media drives:
       # - /media:/mnt/host/media
       # - /run/media:/mnt/host/run-media
     gpus: all
+    # SMB/CIFS shares are read through a pure-Python client by default. To let
+    # the container create kernel `mount.cifs` mounts instead (true zero-copy
+    # paths for every tool), uncomment the capability below.
+    # cap_add:
+    #   - SYS_ADMIN
     # Older Compose releases that do not understand `gpus:` can use this instead:
     # deploy:
     #   resources:
@@ -36,3 +47,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 25s
+
+volumes:
+  fast-frame-network:

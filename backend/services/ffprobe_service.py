@@ -8,11 +8,18 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from config import FFPROBE_BIN
+from config import (
+    FFPROBE_BIN,
+    is_network_url,
+    network_input_args,
+    network_source_name,
+    is_previewable_url,
+)
 
 logger = logging.getLogger(__name__)
 
 PROBE_TIMEOUT_SECONDS = 30.0
+REMOTE_PROBE_TIMEOUT_SECONDS = 60.0
 
 
 class ProbeError(RuntimeError):
@@ -73,7 +80,17 @@ def suggested_rotation(rotation: int) -> str:
     return "none"
 
 
-async def run_ffprobe(path: Path, timeout: float = PROBE_TIMEOUT_SECONDS) -> dict[str, Any]:
+async def run_ffprobe(
+    source: Path | str, timeout: float | None = None
+) -> dict[str, Any]:
+    """Probe a local file *or* a network URL (``http(s)``/``rtsp``/WebDAV).
+
+    URLs are handed to ffprobe verbatim - nothing is downloaded first - so
+    probing a NAS stream costs one network round-trip, not a temp copy.
+    """
+
+    if timeout is None:
+        timeout = REMOTE_PROBE_TIMEOUT_SECONDS if is_network_url(source) else PROBE_TIMEOUT_SECONDS
     args = [
         FFPROBE_BIN,
         "-v",
@@ -82,7 +99,7 @@ async def run_ffprobe(path: Path, timeout: float = PROBE_TIMEOUT_SECONDS) -> dic
         "json",
         "-show_format",
         "-show_streams",
-        str(path),
+        *network_input_args(source),
     ]
     try:
         process = await asyncio.create_subprocess_exec(
@@ -111,7 +128,24 @@ async def run_ffprobe(path: Path, timeout: float = PROBE_TIMEOUT_SECONDS) -> dic
         raise ProbeError("ffprobe returned malformed JSON") from exc
 
 
-def build_metadata(path: Path, probe: dict[str, Any]) -> dict[str, Any]:
+def _source_name(source: Path | str) -> str:
+    return network_source_name(source) if is_network_url(source) else Path(source).name
+
+
+def _source_size(source: Path | str, fmt: dict[str, Any]) -> int:
+    try:
+        return int(fmt.get("size") or 0)
+    except (TypeError, ValueError):
+        pass
+    if is_network_url(source):
+        return 0
+    try:
+        return Path(source).stat().st_size
+    except OSError:
+        return 0
+
+
+def build_metadata(source: Path | str, probe: dict[str, Any]) -> dict[str, Any]:
     streams = [s for s in probe.get("streams") or [] if isinstance(s, dict)]
     video = next((s for s in streams if s.get("codec_type") == "video"), None)
     audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
@@ -130,17 +164,22 @@ def build_metadata(path: Path, probe: dict[str, Any]) -> dict[str, Any]:
     )
 
     try:
-        size_bytes = int(fmt.get("size") or path.stat().st_size)
+        size_bytes = _source_size(source, fmt)
     except OSError:
         size_bytes = 0
 
     audio_channels = int(audio.get("channels") or 0) if audio else 0
     audio_layout = (audio.get("channel_layout") or "") if audio else ""
 
+    is_remote = is_network_url(source)
+    name = _source_name(source)
+
     return {
-        "path": str(path),
-        "name": path.name,
-        "container": (fmt.get("format_name") or path.suffix.lstrip(".")),
+        "path": str(source),
+        "name": name,
+        "network_source": is_remote,
+        "preview_supported": is_previewable_url(str(source)) if is_remote else True,
+        "container": (fmt.get("format_name") or Path(name).suffix.lstrip(".")),
         "duration": round(duration, 3),
         "duration_formatted": format_duration(duration),
         "width": width,
@@ -165,11 +204,16 @@ def build_metadata(path: Path, probe: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def probe_video(path: Path) -> dict[str, Any]:
-    """Return normalised metadata for the video at ``path``."""
+async def probe_video(
+    source: Path | str, display_name: str | None = None
+) -> dict[str, Any]:
+    """Return normalised metadata for the video at a path or network URL."""
 
-    probe = await run_ffprobe(path)
-    return build_metadata(path, probe)
+    probe = await run_ffprobe(source)
+    metadata = build_metadata(source, probe)
+    if display_name:
+        metadata["name"] = display_name
+    return metadata
 
 
 def format_duration(seconds: float) -> str:

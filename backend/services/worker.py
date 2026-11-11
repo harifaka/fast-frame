@@ -10,22 +10,26 @@ import os
 import re
 import time
 import uuid
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from config import (
     MAX_STDERR_BYTES,
     PathSecurityError,
+    is_network_url,
     is_subtitle_file,
     is_video_file,
+    mask_credentials,
+    network_source_name,
     normalize_output_extension,
     resolve_host_path,
 )
 from models import QueueAddRequest
-from services import ffmpeg_builder
+from services import ffmpeg_builder, network_service
 from services.ffmpeg_builder import FFmpegBuildError, RenderOptions, validate_speed
 from services.ffprobe_service import probe_video
 from services.gpu_service import resolve_encoders
+from services.network_service import NetworkSourceError
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +39,7 @@ MAX_ERROR_LOG_CHARS = 12000
 
 _INVALID_FILENAME = re.compile(r'[<>:"/\\|?*]')
 _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+_CREDENTIAL_URL = re.compile(r"([a-z][a-z0-9+.-]*://)[^/@\s]+@", re.IGNORECASE)
 
 NVENC_FAILURE_MARKERS = (
     "nvenc",
@@ -128,6 +133,117 @@ def _is_taken(candidate: Path, reserved: set[str]) -> bool:
         return False
 
 
+def redact_credentials(text: str) -> str:
+    """Mask ``user:password@`` in URLs before they reach logs or the browser."""
+
+    return _CREDENTIAL_URL.sub(r"\1***@", str(text or ""))
+
+
+def plan_source(raw: str) -> dict[str, Any]:
+    """Validate a submitted source and decide how FFmpeg will read it.
+
+    Returns ``display`` (shown in the UI), ``render`` (what ffmpeg gets), the
+    ``name`` used for the default output filename and the ``kind`` of source.
+    """
+
+    value = (raw or "").strip()
+    if not value:
+        raise JobValidationError("A source video is required")
+
+    if is_network_url(value):
+        return {
+            "kind": "url",
+            "display": mask_credentials(value),
+            "render": value,
+            "name": network_source_name(value),
+            "location": None,
+        }
+
+    routed = network_service.match_location(value)
+    if routed is not None:
+        location, _relative = routed
+        name = PurePosixPath(value.replace("\\", "/")).name
+        if location.mode == "smb":
+            info = network_service.stat_path(value)
+            if info is None or info["is_dir"]:
+                raise JobValidationError(
+                    f"The source file could not be found on {location.name}"
+                )
+            if not is_video_file(Path(name)):
+                raise JobValidationError("Unsupported input format (use .mp4, .mkv or .avi)")
+            return {
+                "kind": "smb",
+                "display": value,
+                "render": network_service.stream_url_for_path(value),
+                "name": name,
+                "location": location.public(),
+            }
+        candidate = Path(value)
+        if not candidate.is_file():
+            raise JobValidationError("The source path is not a file")
+        if not is_video_file(candidate):
+            raise JobValidationError("Unsupported input format (use .mp4, .mkv or .avi)")
+        return {
+            "kind": "native",
+            "display": str(candidate),
+            "render": str(candidate),
+            "name": candidate.name,
+            "location": location.public(),
+        }
+
+    try:
+        candidate = resolve_host_path(value, must_exist=True)
+    except PathSecurityError as exc:
+        raise JobValidationError(str(exc)) from exc
+    if not candidate.is_file():
+        raise JobValidationError("The source path is not a file")
+    if not is_video_file(candidate):
+        raise JobValidationError("Unsupported input format (use .mp4, .mkv or .avi)")
+    return {
+        "kind": "local",
+        "display": str(candidate),
+        "render": str(candidate),
+        "name": candidate.name,
+        "location": None,
+    }
+
+
+def plan_destination(raw: str) -> dict[str, Any]:
+    """Validate the destination folder (host drive, NAS share or native path)."""
+
+    value = (raw or "").strip()
+    if not value:
+        raise JobValidationError("A destination folder is required")
+
+    routed = network_service.match_location(value)
+    if routed is not None:
+        location, _relative = routed
+        if location.mode == "smb":
+            if not network_service.is_dir(value):
+                raise JobValidationError(f"The destination folder was not found on {location.name}")
+            return {
+                "mode": "smb",
+                "display": value,
+                "location": location.public(),
+            }
+        candidate = Path(value)
+        if not candidate.is_dir():
+            raise JobValidationError("The target path is not a directory")
+        if not os.access(candidate, os.W_OK):
+            raise JobValidationError("The target directory is not writable")
+        return {"mode": "local", "display": str(candidate), "path": candidate, "location": location.public()}
+
+    try:
+        candidate = resolve_host_path(value, must_exist=True)
+    except PathSecurityError as exc:
+        raise JobValidationError(str(exc)) from exc
+    if not candidate.is_dir():
+        raise JobValidationError("The target path is not a directory")
+    if not os.access(candidate, os.W_OK):
+        raise JobValidationError("The target directory is not writable")
+    return {"mode": "local", "display": str(candidate), "path": candidate, "location": None}
+
+
 class JobManager:
     """Runs one FFmpeg process at a time and streams progress to subscribers."""
 
@@ -138,6 +254,10 @@ class JobManager:
         self._processes: dict[str, asyncio.subprocess.Process] = {}
         self._cancelled: set[str] = set()
         self._wake = asyncio.Event()
+        # Render inputs may embed stream credentials; keep them out of the
+        # snapshots that are broadcast to every connected browser.
+        self._render_inputs: dict[str, str] = {}
+        self._write_paths: dict[str, Path] = {}
         self._task: asyncio.Task[None] | None = None
         self._running_id: str | None = None
         self._stopping = False
@@ -179,20 +299,8 @@ class JobManager:
     async def add_job(
         self, payload: QueueAddRequest, render_now: bool | None = None
     ) -> dict[str, Any]:
-        try:
-            input_path = resolve_host_path(payload.input_path, must_exist=True)
-            output_dir = resolve_host_path(payload.output_dir, must_exist=True)
-        except PathSecurityError as exc:
-            raise JobValidationError(str(exc)) from exc
-
-        if not input_path.is_file():
-            raise JobValidationError("The source path is not a file")
-        if not is_video_file(input_path):
-            raise JobValidationError("Unsupported input format (use .mp4, .mkv or .avi)")
-        if not output_dir.is_dir():
-            raise JobValidationError("The target path is not a directory")
-        if not os.access(output_dir, os.W_OK):
-            raise JobValidationError("The target directory is not writable")
+        source = plan_source(payload.input_path)
+        destination = plan_destination(payload.output_dir)
 
         speed = validate_speed(payload.options.speed)
         codec = payload.options.codec
@@ -200,9 +308,10 @@ class JobManager:
         if not encoders.get("ffmpeg_available"):
             raise JobValidationError("FFmpeg is not available inside the container")
 
-        metadata = await probe_video(input_path)
+        metadata = await probe_video(source["render"], display_name=source["name"])
 
-        filename = payload.output_filename or default_output_name(input_path.name, speed, codec)
+        job_id = uuid.uuid4().hex[:12]
+        filename = payload.output_filename or default_output_name(metadata["name"], speed, codec)
         filename = normalize_output_extension(sanitize_filename(filename), codec)
 
         reserved = {
@@ -210,11 +319,33 @@ class JobManager:
             for job in self._jobs.values()
             if job["status"] in {"queued", "processing"}
         }
-        output_path = unique_output_path(output_dir, filename, reserved)
+
+        transfer: dict[str, Any] | None = None
+        write_path: Path | None = None
+        if destination["mode"] == "smb":
+            output_path = network_service.unique_output_path(
+                destination["display"], filename, reserved
+            )
+            output_name = PurePosixPath(output_path.replace("\\", "/")).name
+            container = PurePosixPath(output_name).suffix.lower()
+            # FFmpeg cannot write straight to an SMB share without a kernel
+            # mount, so it renders into a local staging file that is uploaded
+            # to the share as soon as the encode finishes.
+            write_path = network_service.staging_dir() / f"{job_id}_{output_name}"
+            transfer = {
+                "kind": "smb",
+                "remote_path": output_path,
+                "location_id": destination["location"]["id"],
+                "location_name": destination["location"]["name"],
+            }
+        else:
+            output_path = unique_output_path(destination["path"], filename, reserved)
+            output_name = output_path.name
+            container = output_path.suffix.lower()
 
         options = payload.options.model_dump()
         options["speed"] = speed
-        options["output_container"] = output_path.suffix.lower()
+        options["output_container"] = container
 
         subtitle_path = options.get("subtitle_path")
         if subtitle_path:
@@ -228,18 +359,29 @@ class JobManager:
         else:
             options["subtitle_path"] = None
 
-        job_id = uuid.uuid4().hex[:12]
+        network_source = None
+        if source["kind"] != "local":
+            network_source = {
+                "kind": source["kind"],
+                "location": source["location"],
+                "display": source["display"],
+            }
+
+        render_path = str(write_path) if write_path else str(output_path)
         job: dict[str, Any] = {
             "id": job_id,
             "status": "queued",
             "created_at": time.time(),
             "started_at": None,
             "finished_at": None,
-            "input_path": str(input_path),
+            "input_path": source["display"],
             "input_name": metadata["name"],
+            "input_kind": source["kind"],
+            "network_source": network_source,
             "output_path": str(output_path),
-            "output_dir": str(output_dir),
-            "output_filename": output_path.name,
+            "output_dir": destination["display"],
+            "output_filename": output_name,
+            "transfer": transfer,
             "options": options,
             "source": {
                 "name": metadata["name"],
@@ -257,8 +399,8 @@ class JobManager:
             "ffmpeg_major": encoders.get("ffmpeg_major") or 0,
             "duration": ffmpeg_builder.target_duration(
                 RenderOptions(
-                    input_path=str(input_path),
-                    output_path=str(output_path),
+                    input_path=source["render"],
+                    output_path=render_path,
                     speed=speed,
                     source_duration=metadata["duration"],
                     segments=options.get("segments") or [],
@@ -282,6 +424,10 @@ class JobManager:
             "log": None,
         }
 
+        self._render_inputs[job_id] = source["render"]
+        if write_path:
+            self._write_paths[job_id] = write_path
+
         self._jobs[job_id] = job
         priority = payload.render_now if render_now is None else render_now
         if priority:
@@ -292,13 +438,14 @@ class JobManager:
 
         await self.bus.publish({"type": "job", "job": copy.deepcopy(job)})
         logger.info(
-            "Queued job %s: %s -> %s (%s×, %s, %s)",
+            "Queued job %s: %s -> %s (%s×, %s, %s, %s source)",
             job_id,
-            input_path.name,
-            output_path.name,
+            metadata["name"],
+            output_name,
             speed,
             codec,
             encoders[codec],
+            source["kind"],
         )
         return copy.deepcopy(job)
 
@@ -310,11 +457,15 @@ class JobManager:
         if job["status"] in {"completed", "failed", "cancelled"}:
             # Dismiss a finished job from the queue history.
             self._jobs.pop(job_id, None)
+            self._render_inputs.pop(job_id, None)
+            self._write_paths.pop(job_id, None)
             await self.bus.publish({"type": "snapshot", **self.snapshot()})
             return copy.deepcopy(job)
 
         if job["status"] == "queued":
             self._pending = [pending for pending in self._pending if pending != job_id]
+            self._render_inputs.pop(job_id, None)
+            self._write_paths.pop(job_id, None)
             job["status"] = "cancelled"
             job["finished_at"] = time.time()
             job["error"] = "Cancelled before start"
@@ -353,6 +504,8 @@ class JobManager:
         ]
         for job_id in removable:
             self._jobs.pop(job_id, None)
+            self._render_inputs.pop(job_id, None)
+            self._write_paths.pop(job_id, None)
         if removable:
             await self.bus.publish({"type": "snapshot", **self.snapshot()})
         return [{"id": job_id} for job_id in removable]
@@ -392,11 +545,14 @@ class JobManager:
 
         options = job["options"]
         hardware_encoder = job["encoders"]["h264" if options.get("codec") != "hevc" else "hevc"]
+        render_input = self._render_inputs.pop(job_id, None) or job["input_path"]
+        write_path = self._write_paths.pop(job_id, None)
+        output_path = Path(write_path) if write_path else Path(job["output_path"])
 
         def build(h264_encoder: str, hevc_encoder: str) -> list[str]:
             render_options = RenderOptions(
-                input_path=job["input_path"],
-                output_path=job["output_path"],
+                input_path=render_input,
+                output_path=str(output_path),
                 speed=options.get("speed", 1.0),
                 codec=options.get("codec", "h264"),
                 has_audio=bool(job["source"]["has_audio"]),
@@ -465,7 +621,6 @@ class JobManager:
                 await self._emit(job)
                 return
 
-        output_path = Path(job["output_path"])
         job["finished_at"] = time.time()
         job["elapsed_seconds"] = round(
             job["finished_at"] - (job["started_at"] or job["finished_at"]), 2
@@ -499,6 +654,22 @@ class JobManager:
             await self._emit(job)
             return
 
+        transfer = job.get("transfer")
+        if transfer:
+            try:
+                size = await asyncio.to_thread(
+                    network_service.upload, output_path, job["output_path"]
+                )
+            except (OSError, NetworkSourceError) as exc:
+                _remove_partial(output_path)
+                job["status"] = "failed"
+                job["error"] = f"Could not copy the render to {job['output_path']}: {exc}"
+                job["log"] = log or job["error"]
+                await self._emit(job)
+                logger.warning("Job %s: upload to %s failed: %s", job_id, job["output_path"], exc)
+                return
+            _remove_partial(output_path)
+
         job["status"] = "completed"
         job["output_size_bytes"] = size
         job["log"] = None
@@ -512,7 +683,7 @@ class JobManager:
         """Run one ffmpeg invocation, streaming progress and capturing stderr."""
 
         buffer = bytearray()
-        job["command"] = " ".join(command)
+        job["command"] = redact_credentials(" ".join(command))
         logger.info("Job %s: %s", job["id"], job["command"])
 
         process = await asyncio.create_subprocess_exec(
@@ -530,7 +701,7 @@ class JobManager:
             with contextlib.suppress(Exception):
                 await stderr_task
             self._processes.pop(job["id"], None)
-        return returncode, _decode_tail(buffer)
+        return returncode, redact_credentials(_decode_tail(buffer))
 
     async def _consume_progress(
         self, job: dict[str, Any], stream: asyncio.StreamReader

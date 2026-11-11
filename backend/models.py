@@ -63,3 +63,17 @@ class QueueAddRequest(BaseModel):
     output_filename: str | None = None
     render_now: bool = False
     options: RenderOptionsPayload = Field(default_factory=RenderOptionsPayload)
+
+
+class NetworkMountRequest(BaseModel):
+    """Connect an SMB/CIFS share or a native network path."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(
+        min_length=1,
+        description="//server/share, \\\\server\\share, smb://server/share or Z:\\folder",
+    )
+    username: str | None = None
+    password: str | None = None
+    name: str | None = Field(default=None, description="Display name for the mount")

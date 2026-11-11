@@ -24,6 +24,8 @@ from config import (
     SUPPORTED_SPEED_MIN,
     X264_CRF,
     X265_CRF,
+    is_network_url,
+    network_input_args,
 )
 
 ATEMPO_MIN = 0.5
@@ -74,6 +76,12 @@ class RenderOptions:
     @property
     def container(self) -> str:
         return Path(self.output_path).suffix.lower()
+
+    @property
+    def network_source(self) -> bool:
+        """True when the input is read straight from an HTTP/RTSP/WebDAV URL."""
+
+        return is_network_url(self.input_path)
 
 
 @dataclass(slots=True)
@@ -377,10 +385,9 @@ def build_ffmpeg_command(options: RenderOptions) -> list[str]:
     """Return the full argv list for an ffmpeg render."""
 
     speed = validate_speed(options.speed)
-    input_path = Path(options.input_path)
-    output_path = Path(options.output_path)
     if not options.input_path or not options.output_path:
         raise FFmpegBuildError("Input and output paths are required")
+    output_path = Path(options.output_path)
     if output_path.suffix.lower() not in {".mp4", ".mkv"}:
         raise FFmpegBuildError("Output must be an .mp4 or .mkv file")
 
@@ -394,8 +401,9 @@ def build_ffmpeg_command(options: RenderOptions) -> list[str]:
         "-y",
         # We control orientation explicitly; never let ffmpeg double-rotate.
         "-noautorotate",
-        "-i",
-        str(input_path),
+        # Local paths are passed through; URLs get reconnect flags so a dropped
+        # connection does not abort the render.
+        *network_input_args(options.input_path),
     ]
 
     if graph:

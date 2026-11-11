@@ -7,6 +7,7 @@ import {
   FlipHorizontal2,
   FolderOpen,
   Gauge,
+  Globe,
   Pause,
   Play,
   RectangleHorizontal,
@@ -359,6 +360,12 @@ export default function VideoWorkspace({
             <FolderOpen className="h-3.5 w-3.5" />
             <span className="hidden sm:inline">Browse files</span>
           </button>
+          {metadata?.network_source && (
+            <span className="chip border-sky-500/30 bg-sky-500/10 text-sky-300" title={metadata.path}>
+              <Globe className="h-3 w-3" />
+              Network
+            </span>
+          )}
           {metadata && (
             <>
               <span className="chip">
@@ -393,14 +400,28 @@ export default function VideoWorkspace({
             <div>
               <h2 className="text-sm font-semibold text-slate-200">No source selected</h2>
               <p className="mt-1 text-xs leading-relaxed text-slate-500">
-                Pick a video straight from a mounted host drive. Fast-Frame streams it in place
-                and renders the result into the folder of your choice.
+                Pick a video from a mounted host drive or a NAS share, or paste a direct stream URL.
+                Fast-Frame reads it in place and renders the result into the folder of your choice.
               </p>
             </div>
             <button type="button" onClick={onBrowseSource} className="btn-primary">
               <FolderOpen className="h-4 w-4" />
               Browse host files
             </button>
+          </div>
+        ) : metadata?.preview_supported === false ? (
+          <div className="flex max-w-sm flex-col items-center gap-3 px-6 py-10 text-center">
+            <div className="grid h-14 w-14 place-items-center rounded-2xl border border-sky-500/20 bg-sky-500/10 text-sky-300">
+              <Globe className="h-6 w-6" />
+            </div>
+            <div>
+              <h2 className="text-sm font-semibold text-slate-200">Live stream selected</h2>
+              <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                Browsers cannot preview this stream type. FFmpeg reads it directly with reconnect
+                flags when you render - set the speed and trims as usual.
+              </p>
+              <p className="mt-2 break-all font-mono text-[10px] text-slate-600">{sourcePath}</p>
+            </div>
           </div>
         ) : (
           <div
