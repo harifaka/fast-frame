@@ -162,8 +162,10 @@ This file records every non-obvious architectural decision made while implementi
     `+ Add to Queue` and the active destination folder visible at all times, and the drawer footer
     repeats the actions so a render can be launched while configuring. The command bar also owns
     the live `JobProgress` card, so render feedback is never hidden behind the drawer.
-41. **Drawer and accordion state are transient.** They live in `App`/`ControlPanel` state and are
-    not persisted; presets and the last destination folder remain the only LocalStorage state.
+41. **Drawer, submenu and accordion state are transient.** They live in `App`/`ControlPanel` state
+    and are not persisted; presets and the last destination folder remain the only LocalStorage
+    state. Settings are grouped behind `Input`, `Output` and `Automation` buttons so only one
+    submenu is on screen at a time.
 
 
 

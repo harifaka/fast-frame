@@ -45,16 +45,43 @@ const BUILTIN_PRESETS = [
   },
 ]
 
-const SECTIONS = [
-  { id: 'presets', label: 'Presets', icon: Bookmark, tone: 'text-indigo-400' },
-  { id: 'source', label: 'Source', icon: Film, tone: 'text-accent-400' },
-  { id: 'speed', label: 'Speed', icon: Gauge, tone: 'text-accent-400' },
-  { id: 'encoding', label: 'Encoding', icon: Cpu, tone: 'text-emerald-400' },
-  { id: 'aiview', label: 'AI View', icon: Sparkles, tone: 'text-accent-400' },
-  { id: 'subtitles', label: 'Subtitles', icon: Captions, tone: 'text-indigo-400' },
+const GROUPS = [
+  {
+    id: 'input',
+    label: 'Input',
+    icon: Film,
+    tone: 'text-accent-400',
+    summary: 'Source · Subtitles',
+    tooltip: 'Source video, subtitle burn-in and caption font size',
+    sections: ['source', 'subtitles'],
+  },
+  {
+    id: 'output',
+    label: 'Output',
+    icon: Cpu,
+    tone: 'text-emerald-400',
+    summary: 'Speed · Encoding',
+    tooltip: 'Playback speed, codec, output filename and destination folder',
+    sections: ['speed', 'encoding'],
+  },
+  {
+    id: 'automation',
+    label: 'Automation',
+    icon: Sparkles,
+    tone: 'text-indigo-400',
+    summary: 'Presets · AI View',
+    tooltip: 'Saved presets and the AI view selector for reframing and object tracking',
+    sections: ['presets', 'aiview'],
+  },
 ]
 
-const ALL_SECTIONS_OPEN = Object.fromEntries(SECTIONS.map((section) => [section.id, true]))
+const SECTION_GROUP = Object.fromEntries(
+  GROUPS.flatMap((group) => group.sections.map((id) => [id, group.id])),
+)
+
+const ALL_SECTIONS_OPEN = Object.fromEntries(
+  GROUPS.flatMap((group) => group.sections).map((id) => [id, true]),
+)
 
 function readUserPresets() {
   try {
@@ -77,9 +104,23 @@ function Stat({ label, value }) {
   )
 }
 
-function ConfigSection({ id, title, icon: Icon, tone, badge, open, onToggle, sectionRef, children }) {
+function ConfigSection({
+  id,
+  title,
+  icon: Icon,
+  tone,
+  badge,
+  open,
+  onToggle,
+  sectionRef,
+  hidden = false,
+  children,
+}) {
   return (
-    <section ref={sectionRef} className="panel scroll-mt-2 overflow-hidden">
+    <section
+      ref={sectionRef}
+      className={`panel scroll-mt-2 overflow-hidden ${hidden ? 'hidden' : ''}`}
+    >
       <div className="panel-header">
         <button
           type="button"
@@ -163,26 +204,40 @@ export default function ControlPanel({
   const [presetName, setPresetName] = useState('')
   const [presetError, setPresetError] = useState(null)
   const [openSections, setOpenSections] = useState(ALL_SECTIONS_OPEN)
+  const [activeGroup, setActiveGroup] = useState(GROUPS[0].id)
+  const [pendingScroll, setPendingScroll] = useState(null)
   const sectionRefs = useRef({})
 
   const allPresets = [...BUILTIN_PRESETS, ...userPresets]
   const activePreset = allPresets.find((preset) => preset.id === selectedPreset) || null
   const canDeletePreset = Boolean(activePreset && !activePreset.builtin)
-  const allOpen = SECTIONS.every((section) => openSections[section.id])
+  const groupSections = GROUPS.find((group) => group.id === activeGroup)?.sections ?? []
+  const groupOpen = groupSections.every((id) => openSections[id])
 
   const toggleSection = (id) =>
     setOpenSections((previous) => ({ ...previous, [id]: !previous[id] }))
 
-  const setAllSections = (value) =>
-    setOpenSections(Object.fromEntries(SECTIONS.map((section) => [section.id, value])))
+  const toggleGroupSections = () =>
+    setOpenSections((previous) => ({
+      ...previous,
+      ...Object.fromEntries(groupSections.map((id) => [id, !groupOpen])),
+    }))
 
   const jumpTo = useCallback((id) => {
     if (!id) return
+    if (SECTION_GROUP[id]) setActiveGroup(SECTION_GROUP[id])
     setOpenSections((previous) => ({ ...previous, [id]: true }))
-    window.requestAnimationFrame(() => {
-      sectionRefs.current[id]?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    })
+    setPendingScroll(id)
   }, [])
+
+  useEffect(() => {
+    if (!pendingScroll) return undefined
+    const frame = window.requestAnimationFrame(() => {
+      sectionRefs.current[pendingScroll]?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      setPendingScroll(null)
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [pendingScroll])
 
   useEffect(() => {
     if (!open) return undefined
@@ -278,7 +333,7 @@ export default function ControlPanel({
               CONFIGURATION
             </div>
             <div className="truncate text-[10px] uppercase tracking-[0.18em] text-slate-500">
-              Presets · Source · Speed · Encoding · AI View · Subtitles
+              Input · Output · Automation
             </div>
           </div>
           <button
@@ -291,32 +346,75 @@ export default function ControlPanel({
           </button>
         </div>
 
-        <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-white/5 bg-studio-950/90 px-3 py-2">
-          {SECTIONS.map((section) => (
-            <button
-              key={section.id}
-              type="button"
-              onClick={() => jumpTo(section.id)}
-              className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400 transition hover:border-accent-500/40 hover:text-accent-300"
-            >
-              {section.label}
-            </button>
-          ))}
-          <button
-            type="button"
-            onClick={() => setAllSections(!allOpen)}
-            className="ml-auto text-[10px] font-semibold uppercase tracking-wider text-accent-400 transition hover:text-accent-300"
-          >
-            {allOpen ? 'Collapse all' : 'Expand all'}
-          </button>
+        <div className="shrink-0 border-b border-white/5 bg-studio-950/90 px-3 py-2">
+          <div className="grid grid-cols-3 gap-1.5" role="group" aria-label="Configuration groups">
+            {GROUPS.map((group) => {
+              const GroupIcon = group.icon
+              const active = group.id === activeGroup
+              return (
+                <button
+                  key={group.id}
+                  type="button"
+                  onClick={() => setActiveGroup(active ? null : group.id)}
+                  title={group.tooltip}
+                  aria-expanded={active}
+                  aria-controls="config-group-panel"
+                  className={`flex flex-col gap-1 rounded-lg border px-2 py-1.5 text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/70 ${
+                    active
+                      ? 'border-accent-500/40 bg-accent-500/10'
+                      : 'border-white/5 bg-white/[0.02] hover:border-white/10 hover:bg-white/[0.05]'
+                  }`}
+                >
+                  <span
+                    className={`flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider ${
+                      active ? 'text-accent-200' : 'text-slate-300'
+                    }`}
+                  >
+                    <GroupIcon className={`h-3.5 w-3.5 shrink-0 ${group.tone}`} />
+                    <span className="truncate">{group.label}</span>
+                  </span>
+                  <span className="truncate text-[9px] leading-tight text-slate-500">
+                    {group.summary}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+          <div className="mt-1.5 flex items-center justify-between gap-2">
+            <span className="truncate text-[10px] text-slate-600">
+              {activeGroup
+                ? GROUPS.find((group) => group.id === activeGroup)?.tooltip
+                : 'Pick a group to show its settings'}
+            </span>
+            {activeGroup ? (
+              <button
+                type="button"
+                onClick={toggleGroupSections}
+                className="shrink-0 text-[10px] font-semibold uppercase tracking-wider text-accent-400 transition hover:text-accent-300"
+              >
+                {groupOpen ? 'Collapse all' : 'Expand all'}
+              </button>
+            ) : null}
+          </div>
         </div>
 
-        <div className="flex-1 space-y-2.5 overflow-y-auto px-3 py-3">
+        <div id="config-group-panel" className="flex-1 space-y-2.5 overflow-y-auto px-3 py-3">
+          {!activeGroup && (
+            <div className="panel px-4 py-8 text-center">
+              <p className="text-xs font-medium text-slate-400">
+                Choose a group above to edit its settings.
+              </p>
+              <p className="mt-1 text-[10px] uppercase tracking-widest text-slate-600">
+                Input · Output · Automation
+              </p>
+            </div>
+          )}
           <ConfigSection
             id="presets"
             title="Presets"
             icon={Bookmark}
             tone="text-indigo-400"
+            hidden={activeGroup !== 'automation'}
             open={openSections.presets}
             onToggle={() => toggleSection('presets')}
             sectionRef={(node) => {
@@ -421,6 +519,7 @@ export default function ControlPanel({
             title="Source"
             icon={Film}
             tone="text-accent-400"
+            hidden={activeGroup !== 'input'}
             open={openSections.source}
             onToggle={() => toggleSection('source')}
             sectionRef={(node) => {
@@ -513,6 +612,7 @@ export default function ControlPanel({
             title="Speed"
             icon={Gauge}
             tone="text-accent-400"
+            hidden={activeGroup !== 'output'}
             open={openSections.speed}
             onToggle={() => toggleSection('speed')}
             sectionRef={(node) => {
@@ -579,6 +679,7 @@ export default function ControlPanel({
             title="Encoding"
             icon={Cpu}
             tone="text-emerald-400"
+            hidden={activeGroup !== 'output'}
             open={openSections.encoding}
             onToggle={() => toggleSection('encoding')}
             sectionRef={(node) => {
@@ -687,6 +788,7 @@ export default function ControlPanel({
             title="AI View Selector"
             icon={Sparkles}
             tone="text-accent-400"
+            hidden={activeGroup !== 'automation'}
             open={openSections.aiview}
             onToggle={() => toggleSection('aiview')}
             sectionRef={(node) => {
@@ -726,6 +828,7 @@ export default function ControlPanel({
             title="Subtitles"
             icon={Captions}
             tone="text-indigo-400"
+            hidden={activeGroup !== 'input'}
             open={openSections.subtitles}
             onToggle={() => toggleSection('subtitles')}
             sectionRef={(node) => {

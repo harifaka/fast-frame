@@ -92,9 +92,11 @@ Full setup, troubleshooting and API docs: [`README.md`](README.md). Every autono
 - New `CommandBar` above the workspace: `⚙️ Configuration` toggle, live summary pills
   (`1.25×`, `H.265 / HEVC`, `Subtitles`, `N cuts`, `Output ~mm:ss`), the active destination folder,
   `Render Now` and `+ Add to Queue` — plus the live `JobProgress` card while a render runs.
-- Drawer sections are independent accordions (`PRESETS`, `SOURCE`, `SPEED`, `ENCODING`,
-  `SUBTITLES`) with `Expand all` / `Collapse all`; section pills jump and scroll to a card, and the
-  command-bar pills deep-link into the matching section.
+- Drawer sections live behind three grouped submenu buttons — `Input` (Source, Subtitles),
+  `Output` (Speed, Encoding) and `Automation` (Presets, AI View) — each with a tooltip and its
+  section summary. Only the active group is shown; its cards stay independent accordions with
+  `Expand all` / `Collapse all`, and command-bar pills deep-link into the matching section and
+  group.
 - `Render Now` / `+ Add to Queue` also live in the drawer footer, so a render can be started
   without closing it. `Browse files` was added next to the `PREVIEW` title.
 

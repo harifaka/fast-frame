@@ -309,7 +309,7 @@ fast-frame/
         └── components/
             ├── AiViewPanel.jsx     # AI view selector, YOLO toggle, strength levels, analysis
             ├── CommandBar.jsx      # Configuration toggle, summary pills, destination, Render Now / + Add to Queue
-            ├── ControlPanel.jsx    # Slide-over Configuration drawer (Presets, Source, Speed, Encoding, AI View, Subtitles)
+            ├── ControlPanel.jsx    # Slide-over Configuration drawer, grouped into Input / Output / Automation submenus
             ├── FileBrowser.jsx     # Host Drives (with Quick Drive bar) + Network/SMB/URL modal
             ├── FileEntryList.jsx   # Shared entry list for the Host Drives and Network tabs
             ├── Header.jsx          # GPU status bar and studio title

@@ -52,7 +52,7 @@ export default function CommandBar({
           type="button"
           onClick={() => onOpenConfig?.()}
           aria-expanded={Boolean(configOpen)}
-          title="Open the configuration drawer (Presets, Source, Speed, Encoding, Subtitles)"
+          title="Open the configuration drawer (Input, Output, Automation)"
           className={`inline-flex select-none items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-semibold transition focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/70 ${
             configOpen
               ? 'border-accent-500/40 bg-accent-500/15 text-accent-200'
