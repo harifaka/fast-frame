@@ -18,6 +18,7 @@ import {
   Redo2,
   RotateCcw,
   RotateCw,
+  ScanEye,
   SkipBack,
   SkipForward,
   Sparkles,
@@ -127,6 +128,9 @@ export default function VideoWorkspace({
   const [videoError, setVideoError] = useState(null)
   const [cropAspect, setCropAspect] = useState('free')
   const [showAiView, setShowAiView] = useState(true)
+  const [showAiBox, setShowAiBox] = useState(true)
+  const [aiFrame, setAiFrame] = useState(null)
+  const timeRef = useRef(currentTime)
 
   const srcW = Number(metadata?.width) || 0
   const srcH = Number(metadata?.height) || 0
@@ -141,6 +145,8 @@ export default function VideoWorkspace({
   const isSpherical = Boolean(spherical)
   const isStill = Boolean(spherical?.is_still)
   const aiActive = Boolean(aiView?.active)
+  const aiTrackingEnabled = Boolean(aiView?.ai_tracking_enabled)
+  const aiTrackingLevel = Number(aiView?.ai_tracking_level) || 2
   const aiPan = Number(aiView?.pan) || 0
   const aiTilt = Number(aiView?.tilt) || 0
   const aiZoom = clamp(Number(aiView?.zoom) || 1, 0.5, 8)
@@ -173,6 +179,40 @@ export default function VideoWorkspace({
     observer.observe(element)
     return () => observer.disconnect()
   }, [aspect])
+
+  useEffect(() => {
+    timeRef.current = currentTime
+  }, [currentTime])
+
+  // Poll a single decoded frame while auto-framing is on so the preview can
+  // show what YOLO currently sees without streaming every frame through it.
+  useEffect(() => {
+    if (!sourcePath || !aiTrackingEnabled || !showAiBox) {
+      setAiFrame(null)
+      return undefined
+    }
+    let cancelled = false
+    let timer = null
+    const poll = async () => {
+      try {
+        const result = await api.aiTrackingFrame(
+          sourcePath,
+          Math.max(0, Number(timeRef.current) || 0),
+          aiTrackingLevel,
+        )
+        if (!cancelled) setAiFrame(result)
+      } catch {
+        if (!cancelled) setAiFrame(null)
+      } finally {
+        if (!cancelled) timer = window.setTimeout(poll, 1200)
+      }
+    }
+    poll()
+    return () => {
+      cancelled = true
+      if (timer) window.clearTimeout(timer)
+    }
+  }, [sourcePath, aiTrackingEnabled, showAiBox, aiTrackingLevel])
 
   useEffect(() => {
     setPlaying(false)
@@ -411,6 +451,18 @@ export default function VideoWorkspace({
               AI view
             </button>
           )}
+          {aiTrackingEnabled && (
+            <button
+              type="button"
+              onClick={() => setShowAiBox((value) => !value)}
+              data-active={showAiBox}
+              className="chip border-emerald-500/30 bg-emerald-500/10 text-emerald-300 transition hover:border-emerald-500/50"
+              title={showAiBox ? 'Hide YOLO detection boxes' : 'Show YOLO detection boxes'}
+            >
+              <ScanEye className="h-3 w-3" />
+              Track boxes
+            </button>
+          )}
           {aiActive && (
             <span className="chip border-emerald-500/30 bg-emerald-500/10 text-emerald-300">
               <Crosshair className="h-3 w-3" />
@@ -561,6 +613,52 @@ export default function VideoWorkspace({
                 <span className="absolute bottom-2 left-2 flex items-center gap-1.5 rounded bg-black/70 px-2 py-1 font-mono text-[9px] uppercase tracking-wider text-slate-300">
                   <Sparkles className="h-3 w-3 text-accent-300" />
                   Neutral rectilinear preview · pan {aiPan.toFixed(0)}° / tilt {aiTilt.toFixed(0)}°
+                </span>
+              </div>
+            )}
+
+            {aiTrackingEnabled && showAiBox && aiFrame?.available && (
+              <div className="pointer-events-none absolute inset-0" aria-label="YOLO tracking boxes">
+                {(aiFrame.detections || []).map((item) => {
+                  const key = `${item.x}-${item.y}-${item.w}`
+                  const subject = aiFrame.detection
+                  const primary =
+                    subject &&
+                    key === `${subject.x}-${subject.y}-${subject.w}` &&
+                    item.label === subject.label
+                  return (
+                    <div
+                      key={`${item.label}-${key}`}
+                      className={`absolute rounded-sm border-2 ${
+                        primary
+                          ? 'border-emerald-400 shadow-[0_0_18px_rgba(52,211,153,0.35)]'
+                          : 'border-slate-400/50'
+                      }`}
+                      style={{
+                        left: `${(item.x - item.w / 2) * 100}%`,
+                        top: `${(item.y - item.h / 2) * 100}%`,
+                        width: `${item.w * 100}%`,
+                        height: `${item.h * 100}%`,
+                      }}
+                    >
+                      <span
+                        className={`absolute -top-4 left-0 whitespace-nowrap rounded px-1 font-mono text-[9px] uppercase tracking-wider ${
+                          primary ? 'bg-emerald-400 text-slate-950' : 'bg-black/70 text-slate-200'
+                        }`}
+                      >
+                        {item.label} {(item.confidence * 100).toFixed(0)}%
+                      </span>
+                    </div>
+                  )
+                })}
+                <span className="absolute bottom-2 right-2 flex items-center gap-1.5 rounded bg-black/70 px-2 py-1 font-mono text-[9px] uppercase tracking-wider text-emerald-300">
+                  <ScanEye className="h-3 w-3" />
+                  YOLO {aiFrame.backend} · L{aiTrackingLevel}
+                  {aiFrame.framing
+                    ? ` · pan ${Number(aiFrame.framing.pan).toFixed(0)}° tilt ${Number(
+                        aiFrame.framing.tilt,
+                      ).toFixed(0)}°`
+                    : ' · no subject'}
                 </span>
               </div>
             )}

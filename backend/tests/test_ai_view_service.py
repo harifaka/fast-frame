@@ -159,5 +159,59 @@ class ApplyPatchTests(unittest.TestCase):
             apply_patch(default_state(), {"pan": float("nan")})
 
 
+class AiTrackingStateTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.manager = AiViewStateManager()
+
+    def test_default_state_has_tracking_disabled(self) -> None:
+        state = self.manager.snapshot()
+        self.assertFalse(state["ai_tracking_enabled"])
+        self.assertEqual(state["ai_tracking_level"], 2)
+        self.assertEqual(state["tracking_keyframes"], [])
+        self.assertIsNone(state["tracking_analysis"])
+        self.assertEqual(state["tracking_levels"], [1, 2, 3])
+        self.assertIn("available", state["tracking_detector"])
+        self.assertEqual(state["endpoints"]["tracking"], "/api/ai/tracking")
+
+    def test_enabling_tracking_activates_the_preview(self) -> None:
+        state = self.manager.update({"ai_tracking_enabled": True, "ai_tracking_level": 3})
+        self.assertTrue(state["ai_tracking_enabled"])
+        self.assertEqual(state["ai_tracking_level"], 3)
+        self.assertTrue(state["active"])
+        self.assertEqual(state["tracking_mode"], "subject")
+
+    def test_level_is_validated(self) -> None:
+        with self.assertRaises(AiViewError):
+            self.manager.update({"ai_tracking_level": 4})
+
+    def test_tracking_keyframes_are_sorted_and_clamped(self) -> None:
+        state = self.manager.update(
+            {
+                "tracking_keyframes": [
+                    {"time": 4.0, "pan": 30, "tilt": 10, "zoom": 2},
+                    {"time": 1.5, "pan": -300, "tilt": 250, "zoom": 0.2},
+                ]
+            }
+        )
+        frames = state["tracking_keyframes"]
+        self.assertEqual([frame["time"] for frame in frames], [1.5, 4.0])
+        self.assertEqual(frames[0]["pan"], -180.0)
+        self.assertEqual(frames[0]["tilt"], 90.0)
+        self.assertEqual(frames[0]["zoom"], 1.0)
+
+    def test_analysis_summary_is_copied_and_validated(self) -> None:
+        summary = {"backend": "ultralytics", "level": 2, "keyframe_count": 3}
+        state = self.manager.update({"tracking_analysis": summary})
+        summary["backend"] = "mutated"
+        self.assertEqual(state["tracking_analysis"]["backend"], "ultralytics")
+
+        with self.assertRaises(AiViewError):
+            self.manager.update({"tracking_analysis": "not an object"})
+
+        cleared = self.manager.update({"tracking_analysis": None, "tracking_keyframes": []})
+        self.assertIsNone(cleared["tracking_analysis"])
+        self.assertEqual(cleared["tracking_keyframes"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

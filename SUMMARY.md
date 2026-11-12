@@ -1,6 +1,6 @@
 # Fast-Frame — Implementation Summary
 
-All seven phases from `ROADMAP.md` are implemented, verified and committed.
+All nine phases from `ROADMAP.md` are implemented, verified and committed.
 
 ## ▶ Run it when you're back
 
@@ -133,17 +133,45 @@ Full setup, troubleshooting and API docs: [`README.md`](README.md). Every autono
 - **Rendering unchanged:** framing is preview-only in this phase; renders still use the configured
   crop/rotation.
 
+### Phase 9 — Ultra-lightweight YOLO tracking & 360° smart framing
+- **YOLO engine (`backend/services/yolo_tracking_service.py`):** pluggable, lazily imported backends
+  (`ultralytics` with `yolov8n.pt`, or `onnxruntime` with an exported `yolov8n.onnx`), FFmpeg RGB24
+  frame sampling (2 fps, ≤180 frames), COCO NMS post-processing, subject ranking
+  (confidence × area × temporal continuity), equirect yaw/pitch and rectilinear offset mapping, and
+  keyframe compression into `time/pan/tilt/zoom` samples.
+- **Three strength levels:** Smooth / Dynamic / Aggressive-Lock-on profiles drive smoothing time
+  constant, deadband, maximum camera speed, subject margin, zoom cap and confidence floor; both the
+  analysis pass and the rendered framing use the same profile.
+- **Toggleable API:** `GET /api/ai/tracking/status`, `POST/DELETE /api/ai/tracking`,
+  `POST /api/ai/tracking/analyze` and `GET /api/ai/tracking/frame`; the shared framing document now
+  carries `ai_tracking_enabled`, `ai_tracking_level`, `tracking_keyframes` and `tracking_analysis`,
+  and render options accept `ai_tracking: { enabled, level, mode, keyframes }`.
+- **Render integration:** `build_ai_tracking_filter` emits a time-varying `crop` built from
+  piecewise-linear `if(lt(t,…))` expressions plus a constant `scale`, placed after the manual crop
+  and before the speed change; keyframes are re-timed onto the concatenated keep-segment timeline.
+  No inference runs during encoding.
+- **Frontend:** `AiViewPanel.jsx` gains the *AI YOLO Auto-Framing* switch, three strength buttons
+  (auto re-analyse when keyframes exist), `Analyse clip` / `Clear track`, detector status and
+  keyframe/frame counters; `VideoWorkspace.jsx` polls `/api/ai/tracking/frame` every 1.2 s and draws
+  a labelled bounding-box overlay (primary subject highlighted) behind a `Track boxes` toggle.
+- **Slim image preserved:** default Docker image unchanged; `docker-compose.ai.yml` adds the optional
+  numpy + onnxruntime runtime (~50 MB) and mounts `./models` read-only for the ~12 MB ONNX weights.
+  Without a backend the API stays healthy and reports why the tracker is unavailable.
+
 ---
 
 ## Verification performed
 
-- **110 backend unit tests pass** (`python -m unittest discover -s tests`): atempo math, filter-graph
+- **154 backend unit tests pass** (`python -m unittest discover -s tests`): atempo math, filter-graph
   ordering, multi-cut concat, subtitle escaping/ordering, NVENC command flags, fps-mode
   compatibility, crop pixel math (rotation-aware, even), target duration, filename sanitising,
   collision protection, network URL/SMB helpers, the host-mount rules (lexical `..` rejection,
   drive-mount symlink resolution, hidden WSL folders, drive shortcuts, unreadable entries), `.insp`
-  discovery/projection/metadata shaping, and AI view state clamping, keyframes, MCP commands and
-  file-backed persistence.
+  discovery/projection/metadata shaping, AI view state clamping/keyframes/MCP commands/persistence,
+  and the Phase 9 tracker: level profiles, subject selection, equirect/rectilinear framing math,
+  smoother convergence/deadband/speed limits, keyframe compression, cache reuse, ONNX
+  letterbox/NMS post-processing (skipped when numpy is absent), and the FFmpeg AI-tracking
+  expression builder incl. segment re-timing.
 - **FastAPI app imports cleanly** and exposes every route; WebSocket snapshot + progress events
   verified against a live render (percent rose 0 → 21 → 45 → 69 → 91 → 100 with FPS/speed/ETA).
 - **Real FFmpeg renders verified**:

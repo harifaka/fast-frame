@@ -40,12 +40,24 @@ RUN apt-get update \
 
 WORKDIR /app
 
-COPY backend/requirements.txt backend/requirements.txt
+COPY backend/requirements.txt backend/requirements-ai.txt ./
 RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r backend/requirements.txt
+    && pip install --no-cache-dir -r requirements.txt
+
+# Optional YOLO auto-framing runtime (numpy + onnxruntime, ~50 MB). Disabled by
+# default so the shipped image stays slim; docker-compose.ai.yml enables it.
+ARG INSTALL_AI_TRACKING=0
+RUN if [ "$INSTALL_AI_TRACKING" = "1" ]; then \
+        pip install --no-cache-dir -r requirements-ai.txt; \
+    fi
 
 COPY backend/ backend/
 COPY --from=frontend-build /frontend/dist frontend/dist
+
+# The detector is resolved lazily at runtime; a missing backend or model simply
+# reports "tracker unavailable" in the UI instead of breaking the API.
+ENV AI_TRACKING_BACKEND=auto \
+    AI_TRACKING_MODEL=
 
 EXPOSE 8000
 VOLUME ["/mnt/host"]

@@ -348,8 +348,52 @@ curl -X POST http://localhost:8000/api/ai/mcp-command \
 Values are clamped (`pan` ±180°, `tilt` ±90°, `zoom` 0.5–8×, `fov` 20–140°) and every update bumps
 a `revision` counter. The UI polls the endpoint every 4 s, so an MCP agent's changes appear in the
 preview without a reload. State is in memory by default; set `AI_VIEW_STATE_FILE=/path/state.json`
-to survive a restart. AI framing is preview-only in this phase — renders still use the configured
-crop/rotation.
+to survive a restart.
+
+### YOLO auto-framing (subject tracking)
+
+Phase 9 replaces the mock with a real, ultra-lightweight YOLO tracker. The `AI VIEW` card in the
+drawer now has an **AI YOLO Auto-Framing** switch, a three-level strength selector and an
+`Analyse clip` button; the preview header gains a `Track boxes` chip that toggles a live bounding-box
+overlay driven by `/api/ai/tracking/frame`.
+
+| Level | Behaviour |
+| --- | --- |
+| **Smooth / Cinematic** | slow damped follow (`τ = 1.1 s`), 2.5° deadband, wide margins, max 1.8× zoom |
+| **Dynamic / Action** | balanced follow (`τ = 0.45 s`), 1.0° deadband, tighter framing, max 2.6× zoom |
+| **Aggressive / Lock-on** | fast snap (`τ = 0.15 s`), no deadband, strict centring, max 3.6× zoom |
+
+How it works:
+
+1. `POST /api/ai/tracking/analyze` samples the clip (default 2 fps, max 180 frames) through
+   `backend/services/yolo_tracking_service.py`. Each frame is decoded by FFmpeg as RGB24 and passed
+   to YOLOv8n; people, pets and vehicles are ranked by confidence × area, with continuity from the
+   previous box so the camera does not jump between subjects. Analysis reads seekable local files
+   (mounted shares included); live stream URLs are rejected with a clear message.
+2. Box centres are mapped to camera offsets — yaw/pitch on equirectangular `.insp`/`.insv` frames,
+   normalised offsets on rectilinear video — and smoothed by the selected strength level.
+3. The resulting pan/tilt/zoom keyframes are stored in the shared framing document
+   (`tracking_keyframes`) and passed to the renderer as `options.ai_tracking`.
+4. `backend/services/ffmpeg_builder.py` turns them into piecewise-linear FFmpeg expressions, so the
+   render only evaluates `crop` math per frame — no inference runs during encoding. Keyframes are
+   re-timed automatically when multi-cut keep-segments are used.
+
+The detector runtime is **opt-in** so the default image stays slim. Build with the AI overlay and
+drop the exported weights into `./models`:
+
+```bash
+# one-time: export the ~12 MB YOLOv8n ONNX weights on any machine with Python
+pip install ultralytics
+yolo export model=yolov8n.pt format=onnx
+copy yolov8n.onnx models\        # PowerShell (cp on bash)
+
+# build with numpy + onnxruntime (~50 MB) and mount ./models read-only
+docker compose -f docker-compose.yml -f docker-compose.ai.yml up --build -d
+```
+
+`GET /api/ai/tracking/status` (and `/api/system/config`) report whether a backend was found and why
+not, so the UI can show an actionable hint instead of failing silently. If the runtime is missing,
+the API still works and `Analyse clip` reports *tracker unavailable*.
 
 ---
 
@@ -363,6 +407,7 @@ The backend builds a single `filter_complex` in a fixed order:
       → concat=n=N:v=1:a=1
       → transpose/hflip
       → crop=w:h:x:y        (even pixels, oriented frame)
+      → AI tracking         (time-varying crop/scale from YOLO keyframes, optional)
       → setpts=PTS/speed    (atempo chain for audio)
       → h264_nvenc | hevc_nvenc (or libx264/libx265)
 ```
@@ -402,6 +447,11 @@ Details worth knowing:
 | POST | `/api/ai/view-state` | Partial framing update from the UI or an agent |
 | POST | `/api/ai/view-state/reset` | Reset framing to neutral |
 | POST | `/api/ai/mcp-command` | MCP command envelope (`set_view`, `set_tracking`, `add_keyframe`, …) |
+| GET | `/api/ai/tracking/status` | YOLO backend availability + auto-framing config |
+| POST | `/api/ai/tracking` | Toggle auto-framing (`{ enabled, level }`) |
+| DELETE | `/api/ai/tracking` | Disable auto-framing and drop tracked keyframes |
+| POST | `/api/ai/tracking/analyze` | Sample the clip, track the subject, store keyframes |
+| GET | `/api/ai/tracking/frame?path=…&time=…` | Single-frame detection for the preview overlay |
 | POST | `/api/queue/add` | Queue/render a job (`render_now: true` jumps the queue) |
 | GET | `/api/queue` | Jobs, processing id, queue depth |
 | DELETE | `/api/queue/{id}` | Cancel queued/running job or dismiss a finished one |
@@ -470,8 +520,16 @@ Environment variables:
 | `HOST_MOUNT_PATH` | `/mnt/host` | Root of the zero-copy file browser |
 | `FFMPEG_BIN` | `ffmpeg` | FFmpeg executable (full path allowed) |
 | `FFPROBE_BIN` | `ffprobe` | ffprobe executable |
+| `AI_TRACKING_BACKEND` | `auto` | `auto`, `ultralytics` or `onnx` |
+| `AI_TRACKING_MODEL` | — | Path to `yolov8n.onnx` (or `yolov8n.pt` for ultralytics) |
 
-Tests (stdlib `unittest`, no FFmpeg required):
+YOLO auto-framing needs one of the optional runtimes: `pip install -r backend/requirements-ai.txt`
+(onnxruntime + numpy, then point `AI_TRACKING_MODEL` at an exported ONNX model) or
+`pip install ultralytics` (torch, weights auto-download). Without either, everything else still
+works and `/api/ai/tracking/status` explains what is missing.
+
+Tests (stdlib `unittest`, no FFmpeg required; the ONNX post-processing tests skip when numpy is not
+installed):
 
 ```bash
 cd backend
@@ -519,14 +577,18 @@ fast-frame/
 ├── Dockerfile                 # 2-stage slim build (Node 20 builder -> Python 3.11 + FFmpeg + NVENC env)
 ├── docker-compose.yml         # GPU passthrough + automatic host drive mounts
 ├── docker-compose.cpu.yml     # CPU-only override (gpus: []) for machines without NVIDIA drivers
+├── docker-compose.ai.yml      # YOLO auto-framing overlay (numpy + onnxruntime, mounts ./models)
+├── models/                    # Put the exported yolov8n.onnx here (~12 MB, not baked into the image)
 ├── .github/workflows/release.yml  # push to main -> GHCR image + v<commit-count> release
 ├── backend/
 │   ├── main.py                # FastAPI app, WebSocket, static frontend
 │   ├── config.py              # Mount root, drive shortcuts, path-traversal defence
 │   ├── models.py              # Pydantic job/options + AI framing models
+│   ├── requirements-ai.txt    # Optional numpy/onnxruntime for YOLO tracking
 │   ├── routers/{filesystem,network,queue,ai}.py
 │   └── services/
 │       ├── ai_view_service.py # AI framing state + MCP command handling
+│       ├── yolo_tracking_service.py # YOLOv8n detection, 3 strength levels, keyframe generation
 │       ├── ffmpeg_builder.py  # filter_complex + NVENC command builder
 │       ├── ffprobe_service.py # metadata extraction
 │       ├── gpu_service.py     # nvidia-smi + encoder detection
@@ -535,14 +597,14 @@ fast-frame/
 │       └── worker.py          # async queue, FFmpeg runner, progress parser
 ├── frontend/                  # React + Vite + Tailwind studio UI
 │   └── src/components/
-│       ├── AiViewPanel.jsx    # Mock AI view selector (pan/tilt/zoom, MCP-ready)
+│       ├── AiViewPanel.jsx    # AI view selector + YOLO toggle, levels, analysis
 │       ├── CommandBar.jsx     # Configuration toggle, summary pills, destination, render actions
 │       ├── ControlPanel.jsx   # Slide-over configuration drawer with collapsible cards
 │       ├── FileBrowser.jsx    # Host drives (quick drive bar) + network/SMB/URL tabs
 │       ├── NetworkPanel.jsx   # Direct URL & SMB/NAS share connector
-│       ├── VideoWorkspace.jsx # Preview player, neutral 360° view, rotate/crop toolbar
+│       ├── VideoWorkspace.jsx # Preview player, neutral 360° view, YOLO box overlay, rotate/crop toolbar
 │       └── RenderQueue.jsx    # Live progress & batch queue drawer
-└── backend/tests/             # command-builder, queue helper, network, host-mount, .insp & AI view tests
+└── backend/tests/             # command-builder, queue helper, network, host-mount, .insp, AI view & tracking tests
 ```
 
 `DECISIONS.md` records every architectural trade-off made during implementation.

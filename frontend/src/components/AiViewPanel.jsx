@@ -1,8 +1,10 @@
 import {
   Activity,
   Crosshair,
+  Loader2,
   Plus,
   RotateCcw,
+  ScanEye,
   Sparkles,
   Target,
   Trash2,
@@ -17,6 +19,12 @@ const TRACKING_MODES = [
   { id: 'subject', label: 'Subject' },
   { id: 'face', label: 'Face' },
   { id: 'object', label: 'Object' },
+]
+
+const TRACKING_LEVELS = [
+  { level: 1, name: 'Smooth', description: 'Slow, damped follow with wide margins' },
+  { level: 2, name: 'Dynamic', description: 'Balanced speed with tighter framing' },
+  { level: 3, name: 'Lock-on', description: 'Fast snapping and strict centring' },
 ]
 
 function toDraft(state) {
@@ -64,6 +72,10 @@ export default function AiViewPanel({
   onChange,
   onCommand,
   onReset,
+  onAnalyze,
+  analyzing = false,
+  analyzeError = null,
+  canAnalyze = false,
   disabled = false,
   saving = false,
   error = null,
@@ -80,6 +92,20 @@ export default function AiViewPanel({
   const active = Boolean(state?.active)
   const mcpReady = Boolean(state?.mcp_ready)
   const busy = disabled || saving
+
+  const detector = state?.tracking_detector || null
+  const trackingEnabled = Boolean(state?.ai_tracking_enabled)
+  const trackingLevel = Number(state?.ai_tracking_level) || 2
+  const trackingKeyframes = useMemo(
+    () => state?.tracking_keyframes || [],
+    [state?.tracking_keyframes],
+  )
+  const analysis = state?.tracking_analysis || null
+  const levels = state?.tracking_levels || [1, 2, 3]
+  const levelInfo =
+    detector?.levels?.find((item) => item.level === trackingLevel) ||
+    TRACKING_LEVELS[trackingLevel - 1]
+  const detectorReady = Boolean(detector?.available)
 
   const commit = (patch) => onChange?.(patch)
   const updateDraft = (key, value) => setDraft((previous) => ({ ...previous, [key]: value }))
@@ -112,8 +138,8 @@ export default function AiViewPanel({
             AI View Selector
           </div>
           <p className="mt-1 text-[10px] leading-relaxed text-slate-500">
-            Mock framing state shared with external agents. Pan/tilt/zoom is preview-only until the
-            AI renderer ships.
+            YOLO subject tracking drives pan/tilt/zoom for preview and renders; external MCP
+            agents steer the same framing document.
           </p>
         </div>
         <span
@@ -129,6 +155,121 @@ export default function AiViewPanel({
           />
           MCP AI Control Ready
         </span>
+      </div>
+
+      <div className="space-y-2 rounded-lg border border-white/10 bg-white/[0.02] p-2.5">
+        <div className="flex items-center justify-between gap-2">
+          <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-300">
+            <ScanEye className="h-3.5 w-3.5 text-accent-300" />
+            AI YOLO Auto-Framing
+          </span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={trackingEnabled}
+            aria-label="Toggle AI YOLO auto-framing"
+            disabled={busy}
+            onClick={() => commit({ ai_tracking_enabled: !trackingEnabled })}
+            data-active={trackingEnabled}
+            className="relative h-5 w-9 rounded-full border border-white/10 bg-white/10 transition disabled:opacity-40 data-[active=true]:border-accent-500/50 data-[active=true]:bg-accent-500/40"
+          >
+            <span
+              className={`absolute top-0.5 h-3.5 w-3.5 rounded-full transition-all ${
+                trackingEnabled ? 'left-[18px] bg-white' : 'left-0.5 bg-slate-300'
+              }`}
+            />
+          </button>
+        </div>
+
+        <div className="segmented">
+          {levels.map((level) => {
+            const info = TRACKING_LEVELS[level - 1]
+            return (
+              <button
+                key={level}
+                type="button"
+                disabled={busy}
+                data-active={trackingLevel === level}
+                title={info?.description}
+                onClick={() => {
+                  commit({ ai_tracking_level: level })
+                  if (trackingKeyframes.length > 0) onAnalyze?.(level)
+                }}
+              >
+                {info?.name || `Level ${level}`}
+              </button>
+            )
+          })}
+        </div>
+        <p className="text-[10px] leading-relaxed text-slate-500">
+          {levelInfo?.description || 'Balanced tracking speed and framing.'}
+        </p>
+
+        <div className="flex flex-wrap items-center gap-1.5">
+          <button
+            type="button"
+            className="btn-ghost !px-2 !py-1 !text-[11px]"
+            disabled={busy || analyzing || !canAnalyze}
+            onClick={() => onAnalyze?.(trackingLevel)}
+            title="Sample the clip and track the primary subject"
+          >
+            {analyzing ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <ScanEye className="h-3.5 w-3.5" />
+            )}
+            {analyzing ? 'Analysing…' : 'Analyse clip'}
+          </button>
+          <button
+            type="button"
+            className="btn-ghost !px-2 !py-1 !text-[11px]"
+            disabled={busy || trackingKeyframes.length === 0}
+            onClick={() =>
+              commit({
+                ai_tracking_enabled: false,
+                tracking_keyframes: [],
+                tracking_analysis: null,
+              })
+            }
+            title="Discard the tracked keyframes"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            Clear track
+          </button>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-1.5 font-mono text-[10px] text-slate-500">
+          <span
+            className={`chip ${
+              detectorReady
+                ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                : 'border-amber-500/30 bg-amber-500/10 text-amber-300'
+            }`}
+          >
+            {detector?.loading
+              ? 'Loading tracker…'
+              : detectorReady
+                ? `${detector.backend}${detector.model ? ` · ${detector.model}` : ''}`
+                : 'Tracker unavailable'}
+          </span>
+          <span>{trackingKeyframes.length} keyframes</span>
+          {analysis?.frames_analyzed ? (
+            <span>
+              {analysis.frames_with_subject}/{analysis.frames_analyzed} frames
+            </span>
+          ) : null}
+        </div>
+
+        {!detectorReady && detector?.reason && (
+          <p className="rounded-md border border-amber-500/25 bg-amber-500/10 px-2 py-1 text-[10px] leading-relaxed text-amber-200">
+            {detector.reason}
+          </p>
+        )}
+        {analyzeError && (
+          <p className="rounded-md border border-red-500/25 bg-red-500/10 px-2 py-1 text-[10px] text-red-200">
+            {analyzeError}
+          </p>
+        )}
       </div>
 
       <div className="flex items-center justify-between gap-2">

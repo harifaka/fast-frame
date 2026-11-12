@@ -1,10 +1,11 @@
 """AI framing directives shared by the studio UI and external MCP agents.
 
 The service owns a single framing document - pan, tilt, zoom, field of view,
-tracking mode and keyframe offsets - and exposes it through
-``/api/ai/view-state`` (GET/POST) plus ``/api/ai/mcp-command``.  It is a mock
-controller: the state is authoritative for the UI preview and for anything an
-MCP agent decides to send, but no computer-vision tracking runs yet.
+tracking mode, keyframe offsets and the YOLO auto-framing configuration - and
+exposes it through ``/api/ai/view-state`` (GET/POST) plus
+``/api/ai/mcp-command``.  It is the authoritative state for the UI preview and
+for anything an MCP agent decides to send; the vision pass itself lives in
+:mod:`services.yolo_tracking_service` and writes its keyframes here.
 
 State is kept in memory and, when ``AI_VIEW_STATE_FILE`` is configured, mirrored
 to a JSON file so a restarted API keeps the last framing an agent requested.
@@ -20,10 +21,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
+from services.yolo_tracking_service import (
+    DEFAULT_LEVEL,
+    LEVEL_PROFILES,
+    MAX_KEYFRAMES as MAX_TRACKING_KEYFRAMES,
+    tracking_service,
+)
+
 logger = logging.getLogger(__name__)
 
 TRACKING_MODES: tuple[str, ...] = ("off", "manual", "subject", "face", "object")
 CONTROLLERS: tuple[str, ...] = ("ui", "mcp")
+TRACKING_LEVELS: tuple[int, ...] = tuple(sorted(LEVEL_PROFILES))
 
 PAN_LIMITS = (-180.0, 180.0)
 TILT_LIMITS = (-90.0, 90.0)
@@ -31,6 +40,10 @@ ROLL_LIMITS = (-45.0, 45.0)
 ZOOM_LIMITS = (0.5, 8.0)
 FOV_LIMITS = (20.0, 140.0)
 MAX_KEYFRAMES = 500
+
+#: Fields where ``None`` is a meaningful value ("clear this"), so a partial
+#: update must not silently drop it the way other ``None`` values are dropped.
+_NULLABLE_FIELDS = frozenset({"tracking_analysis"})
 
 MCP_ACTIONS: tuple[str, ...] = (
     "set_view",
@@ -79,6 +92,10 @@ def default_state() -> dict[str, Any]:
         "keyframe_offsets": [],
         "source_path": None,
         "controller": "ui",
+        "ai_tracking_enabled": False,
+        "ai_tracking_level": DEFAULT_LEVEL,
+        "tracking_keyframes": [],
+        "tracking_analysis": None,
         "revision": 0,
         "updated_at": None,
     }
@@ -96,6 +113,39 @@ def _normalise_keyframe(raw: Mapping[str, Any]) -> dict[str, Any]:
         "tilt": _clamp(_coerce_float(raw.get("tilt", 0.0), "keyframe.tilt"), TILT_LIMITS),
         "zoom": _clamp(_coerce_float(raw.get("zoom", 1.0), "keyframe.zoom"), ZOOM_LIMITS),
     }
+
+
+def _normalise_tracking_keyframe(raw: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate one YOLO framing keyframe (pan/tilt degrees + zoom factor)."""
+
+    if not isinstance(raw, Mapping):
+        raise AiViewError("tracking keyframe entries must be objects")
+    time_value = _coerce_float(raw.get("time", 0.0), "tracking_keyframe.time")
+    if time_value < 0:
+        raise AiViewError("tracking_keyframe.time must be >= 0")
+    return {
+        "time": round(time_value, 3),
+        "pan": _clamp(
+            _coerce_float(raw.get("pan", 0.0), "tracking_keyframe.pan"), PAN_LIMITS
+        ),
+        "tilt": _clamp(
+            _coerce_float(raw.get("tilt", 0.0), "tracking_keyframe.tilt"), TILT_LIMITS
+        ),
+        # The rendered window never gets larger than the source frame.
+        "zoom": _clamp(
+            _coerce_float(raw.get("zoom", 1.0), "tracking_keyframe.zoom"), (1.0, 8.0)
+        ),
+    }
+
+
+def _normalise_level(value: Any) -> int:
+    try:
+        level = int(round(float(value)))
+    except (TypeError, ValueError) as exc:
+        raise AiViewError("ai_tracking_level must be 1, 2 or 3") from exc
+    if level not in TRACKING_LEVELS:
+        raise AiViewError("ai_tracking_level must be 1, 2 or 3")
+    return level
 
 
 def apply_patch(state: dict[str, Any], patch: Mapping[str, Any]) -> dict[str, Any]:
@@ -140,6 +190,38 @@ def apply_patch(state: dict[str, Any], patch: Mapping[str, Any]) -> dict[str, An
             raise AiViewError(f"controller must be one of: {', '.join(CONTROLLERS)}")
         next_state["controller"] = controller
 
+    if "ai_tracking_level" in patch and patch["ai_tracking_level"] is not None:
+        next_state["ai_tracking_level"] = _normalise_level(patch["ai_tracking_level"])
+
+    if "ai_tracking_enabled" in patch and patch["ai_tracking_enabled"] is not None:
+        enabled = bool(patch["ai_tracking_enabled"])
+        next_state["ai_tracking_enabled"] = enabled
+        if enabled:
+            next_state["active"] = True
+            if next_state["tracking_mode"] == "off":
+                next_state["tracking_mode"] = "subject"
+
+    if "tracking_keyframes" in patch and patch["tracking_keyframes"] is not None:
+        frames = patch["tracking_keyframes"]
+        if not isinstance(frames, (list, tuple)):
+            raise AiViewError("tracking_keyframes must be a list")
+        if len(frames) > MAX_TRACKING_KEYFRAMES:
+            raise AiViewError(
+                f"at most {MAX_TRACKING_KEYFRAMES} tracking keyframes are supported"
+            )
+        next_state["tracking_keyframes"] = sorted(
+            (_normalise_tracking_keyframe(frame) for frame in frames),
+            key=lambda frame: frame["time"],
+        )
+
+    if "tracking_analysis" in patch:
+        analysis = patch["tracking_analysis"]
+        if analysis is not None and not isinstance(analysis, Mapping):
+            raise AiViewError("tracking_analysis must be an object or null")
+        next_state["tracking_analysis"] = (
+            json.loads(json.dumps(dict(analysis))) if analysis is not None else None
+        )
+
     if "keyframe_offsets" in patch and patch["keyframe_offsets"] is not None:
         frames = patch["keyframe_offsets"]
         if not isinstance(frames, (list, tuple)):
@@ -171,15 +253,22 @@ class AiViewStateManager:
             state = json.loads(json.dumps(self._state))
         state["mcp_ready"] = True
         state["tracking_modes"] = list(TRACKING_MODES)
+        state["tracking_levels"] = list(TRACKING_LEVELS)
+        state["tracking_detector"] = tracking_service.status()
         state["endpoints"] = {
             "view_state": "/api/ai/view-state",
             "mcp_command": "/api/ai/mcp-command",
+            "tracking": "/api/ai/tracking",
+            "tracking_analyze": "/api/ai/tracking/analyze",
+            "tracking_frame": "/api/ai/tracking/frame",
         }
         return state
 
     def update(self, patch: Mapping[str, Any]) -> dict[str, Any]:
         candidate = {
-            key: value for key, value in (patch or {}).items() if value is not None
+            key: value
+            for key, value in (patch or {}).items()
+            if value is not None or key in _NULLABLE_FIELDS
         }
         if not candidate:
             return self.snapshot()

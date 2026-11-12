@@ -1,0 +1,28 @@
+# AI auto-framing overlay (Phase 9).
+#
+# Adds the ultralight YOLO runtime (numpy + onnxruntime, ~50 MB) to the image
+# and mounts ./models read-only so the exported YOLOv8n ONNX weights (~12 MB)
+# never bloat the image itself.
+#
+# One-time model export on any machine with Python:
+#   pip install ultralytics
+#   yolo export model=yolov8n.pt format=onnx
+#   copy yolov8n.onnx models/           # PowerShell
+#   cp yolov8n.onnx models/             # bash
+#
+# Then start the stack with:
+#   docker compose -f docker-compose.yml -f docker-compose.ai.yml up --build -d
+#
+# Prefer `ultralytics` instead? Build with --build-arg INSTALL_AI_TRACKING=0,
+# `pip install ultralytics` in the image and leave AI_TRACKING_MODEL empty: the
+# tracker then downloads yolov8n.pt (~6 MB) on first use.
+services:
+  fast-frame:
+    build:
+      args:
+        INSTALL_AI_TRACKING: "1"
+    environment:
+      AI_TRACKING_BACKEND: auto
+      AI_TRACKING_MODEL: /models/yolov8n.onnx
+    volumes:
+      - ./models:/models:ro

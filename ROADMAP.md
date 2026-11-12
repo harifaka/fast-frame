@@ -39,6 +39,7 @@ The goal is to build a Dockerized, web-based video processing application utiliz
 | 6 | Focus-mode layout: configuration drawer & always-on render bar | ✅ Implemented |
 | 7 | Auto-mounted host drives, network/SMB sources & slim multi-stage image | ✅ Implemented |
 | 8 | Insta360 `.insp` support & mock AI view selector (MCP-ready) | ✅ Implemented |
+| 9 | Ultra-lightweight YOLO tracking & 360° smart framing (3 strength levels) | ✅ Implemented |
 
 Each phase lists the tasks it delivered and its definition of done; completed phases are
 kept as the reference specification for the behaviour that must not regress.
@@ -206,6 +207,26 @@ Running `docker compose up --build -d` builds the slim image (~240 MB compressed
 
 **Phase 8 Definition of Done:**
 `.insp` files are successfully recognized and listed in the file browser, open in a neutral preview mode, and the UI exposes the mock AI view selector state which can be updated via backend API endpoints.
+
+---
+
+#### 👁️ PHASE 9: Ultra-Lightweight YOLO AI Tracking & 360° Smart Framing ✅
+**Goal:** Upgrade the mock AI View Selector to a real, ultra-lightweight YOLO-based object detection and subject-tracking engine (running on `ultralytics` YOLO nano model) with 3 selectable aggression/strength levels, fully toggleable in the UI, keeping the Docker image size tightly controlled while unlocking native smart framing for 360°/.insp video processing.
+
+**Delivered (Backend & AI Engine):**
+1. **Lightweight YOLO integration (`backend/services/yolo_tracking_service.py`):**
+   - Pluggable inference backends resolved lazily: `ultralytics` (`yolov8n.pt`, ~6 MB, auto-download) or `onnxruntime` with an exported `yolov8n.onnx` (~12 MB). Neither is imported at startup, and the optional wheels live in `backend/requirements-ai.txt` (~50 MB) behind `--build-arg INSTALL_AI_TRACKING=1` / `docker-compose.ai.yml`.
+   - Frame-by-frame detection of people, pets and vehicles via FFmpeg RGB24 sampling (2 fps, max 180 samples), with COCO post-processing/NMS for the ONNX path and equirectangular/rectilinear coordinate mapping plus temporal continuity scoring.
+2. **3 strength levels:** `LEVEL_PROFILES` tunes smoothing (1.1 s / 0.45 s / 0.15 s), deadband, max camera speed, subject margin, zoom cap and confidence floor for *Smooth*, *Dynamic* and *Aggressive / Lock-on*.
+3. **Toggleable API & pipeline integration:** `POST /api/ai/tracking`, `DELETE /api/ai/tracking`, `POST /api/ai/tracking/analyze`, `GET /api/ai/tracking/frame`, `GET /api/ai/tracking/status`; the shared framing document carries `ai_tracking_enabled`, `ai_tracking_level`, `tracking_keyframes` and `tracking_analysis`, and render options accept `ai_tracking: { enabled, level, mode, keyframes }`.
+4. **FFmpeg integration:** `build_ai_tracking_filter` emits a time-varying `crop` (piecewise-linear `if(lt(t,…))` expressions) plus a constant `scale`, inserted after the manual crop and before the speed change, with keyframes re-timed onto the multi-cut timeline.
+
+**Delivered (Frontend):**
+- `AiViewPanel.jsx`: real-time *AI YOLO Auto-Framing* toggle (with detector/backend status), 3-level strength buttons (auto re-analysing when keyframes exist), `Analyse clip`, `Clear track`, keyframe/frame counters.
+- `VideoWorkspace.jsx`: live bounding-box debug overlay for every detection (primary subject highlighted) with a `Track boxes` toggle and a YOLO status chip showing level and current pan/tilt.
+
+**Phase 9 Definition of Done:**
+Enabling YOLO AI tracking in the UI automatically detects and tracks subjects in `.insp` or standard videos, dynamically adjusting framing coordinates across the 3 strength levels without bloating the Docker image beyond a few extra megabytes (default image unchanged; the opt-in overlay adds ~50 MB of runtime plus the mounted ~12 MB model).
 
 ---
 

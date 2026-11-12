@@ -409,6 +409,7 @@ class JobManager:
                     source_height=metadata["height"],
                     rotation=options.get("rotation") or "none",
                     crop=options.get("crop"),
+                    ai_tracking=options.get("ai_tracking"),
                 )
             ),
             "progress": {
@@ -569,6 +570,7 @@ class JobManager:
                 rotation=options.get("rotation") or "none",
                 flip_horizontal=bool(options.get("flip_horizontal")),
                 crop=options.get("crop"),
+                ai_tracking=options.get("ai_tracking"),
             )
             return ffmpeg_builder.build_ffmpeg_command(render_options)
 

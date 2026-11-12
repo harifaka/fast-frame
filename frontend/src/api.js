@@ -95,6 +95,20 @@ export const api = {
     headers: JSON_HEADERS,
     body: JSON.stringify(payload ?? {}),
   }),
+  aiTrackingStatus: () => request('/api/ai/tracking/status'),
+  updateAiTracking: (payload) => request('/api/ai/tracking', {
+    method: 'POST',
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload ?? {}),
+  }),
+  clearAiTracking: () => request('/api/ai/tracking', { method: 'DELETE' }),
+  analyzeAiTracking: (payload) => request('/api/ai/tracking/analyze', {
+    method: 'POST',
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload ?? {}),
+  }),
+  aiTrackingFrame: (path, time = 0, level) =>
+    request(`/api/ai/tracking/frame${buildQuery({ path, time, level })}`),
 }
 
 export function openProgressSocket(onEvent, onStatusChange) {

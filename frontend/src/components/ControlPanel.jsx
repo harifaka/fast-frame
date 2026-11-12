@@ -144,6 +144,9 @@ export default function ControlPanel({
   onAiViewChange,
   onAiViewCommand,
   onAiViewReset,
+  onAiTrackingAnalyze,
+  aiTrackingAnalyzing = false,
+  aiTrackingError = null,
   aiViewEndpoint = '/api/ai/view-state',
   currentTime = 0,
 }) {
@@ -706,6 +709,10 @@ export default function ControlPanel({
               onChange={onAiViewChange}
               onCommand={onAiViewCommand}
               onReset={onAiViewReset}
+              onAnalyze={onAiTrackingAnalyze}
+              analyzing={aiTrackingAnalyzing}
+              analyzeError={aiTrackingError}
+              canAnalyze={Boolean(sourcePath)}
               disabled={!sourcePath}
               saving={aiViewSaving}
               error={aiViewError}

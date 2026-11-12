@@ -57,6 +57,8 @@ export default function App() {
   const [aiView, setAiView] = useState(null)
   const [aiViewSaving, setAiViewSaving] = useState(false)
   const [aiViewError, setAiViewError] = useState(null)
+  const [aiAnalyzing, setAiAnalyzing] = useState(false)
+  const [aiAnalyzeError, setAiAnalyzeError] = useState(null)
 
   const openConfig = useCallback((section = null) => {
     setQueueOpen(false)
@@ -147,6 +149,38 @@ export default function App() {
       setAiViewSaving(false)
     }
   }, [])
+
+  const analyzeAiTracking = useCallback(
+    async (level = null) => {
+      if (!sourcePath) {
+        setAiAnalyzeError('Select a source video before running YOLO auto-framing.')
+        return null
+      }
+      setAiAnalyzing(true)
+      setAiAnalyzeError(null)
+      try {
+        const result = await api.analyzeAiTracking({
+          source_path: sourcePath,
+          level: level ?? aiView?.ai_tracking_level ?? 2,
+        })
+        if (result?.view_state) setAiView(result.view_state)
+        const analysis = result?.analysis || {}
+        setNotice({
+          type: 'success',
+          message: `YOLO auto-framing → ${analysis.keyframe_count ?? 0} keyframes from ${
+            analysis.frames_with_subject ?? 0
+          }/${analysis.frames_analyzed ?? 0} sampled frames`,
+        })
+        return result
+      } catch (error) {
+        setAiAnalyzeError(error.message)
+        return null
+      } finally {
+        setAiAnalyzing(false)
+      }
+    },
+    [aiView?.ai_tracking_level, sourcePath],
+  )
 
   const loadGpu = useCallback(async (refresh = false) => {
     setRefreshing(true)
@@ -275,6 +309,9 @@ export default function App() {
           tracking_mode: sphericalSource ? 'manual' : 'off',
           target: '',
           keyframe_offsets: [],
+          ai_tracking_enabled: false,
+          tracking_keyframes: [],
+          tracking_analysis: null,
         })
         setSettings((previous) => ({
           ...previous,
@@ -348,6 +385,15 @@ export default function App() {
             rotation: settings.rotation,
             flip_horizontal: settings.flipHorizontal,
             crop: settings.crop,
+            ai_tracking:
+              aiView?.ai_tracking_enabled && (aiView?.tracking_keyframes?.length || 0) > 1
+                ? {
+                    enabled: true,
+                    level: Number(aiView.ai_tracking_level) || 2,
+                    mode: metadata?.spherical ? 'spherical' : 'rectilinear',
+                    keyframes: aiView.tracking_keyframes,
+                  }
+                : null,
             prefer_gpu: settings.preferGpu,
           },
         })
@@ -366,7 +412,7 @@ export default function App() {
         setSubmitting(false)
       }
     },
-    [settings, sourcePath, targetDir],
+    [aiView, metadata, settings, sourcePath, targetDir],
   )
 
   const cancelJob = useCallback(async (jobId) => {
@@ -564,6 +610,9 @@ export default function App() {
         onAiViewChange={updateAiView}
         onAiViewCommand={sendAiCommand}
         onAiViewReset={resetAiView}
+        onAiTrackingAnalyze={analyzeAiTracking}
+        aiTrackingAnalyzing={aiAnalyzing}
+        aiTrackingError={aiAnalyzeError}
         aiViewEndpoint={appConfig?.ai_view?.view_state_endpoint || '/api/ai/view-state'}
         currentTime={currentTime}
       />

@@ -4,7 +4,7 @@ The module is intentionally dependency-free (standard library only) so the
 command construction can be unit-tested without FastAPI or ffmpeg installed.
 
 Pipeline order (later phases extend this):
-    subtitles (1x) -> multi-trim & concat -> rotate/flip -> crop -> speed -> NVENC
+    subtitles (1x) -> multi-trim & concat -> rotate/flip -> crop -> AI tracking -> speed -> NVENC
 """
 
 from __future__ import annotations
@@ -64,6 +64,8 @@ class RenderOptions:
     rotation: str = "none"
     flip_horizontal: bool = False
     crop: dict[str, float] | None = None
+    # YOLO auto-framing: {"enabled", "level", "mode", "keyframes"}.
+    ai_tracking: dict[str, Any] | None = None
 
     @property
     def encoder(self) -> str:
@@ -98,13 +100,13 @@ class FilterGraph:
         return bool(self.statements)
 
 
-def _format_number(value: float) -> str:
+def _format_number(value: float, precision: int = 4) -> str:
     """Render floats without trailing zeros, using a dot as decimal separator."""
 
-    rounded = round(float(value), 4)
+    rounded = round(float(value), precision)
     if rounded == int(rounded):
         return str(int(rounded))
-    return f"{rounded:.4f}".rstrip("0").rstrip(".")
+    return f"{rounded:.{precision}f}".rstrip("0").rstrip(".")
 
 
 def validate_speed(speed: float) -> float:
@@ -304,12 +306,262 @@ def build_crop_filter(options: RenderOptions) -> str | None:
     return f"crop={crop_w}:{crop_h}:{crop_x}:{crop_y}"
 
 
+AI_TRACKING_MODES: tuple[str, ...] = ("rectilinear", "spherical")
+#: Deeper expression trees get expensive to evaluate per frame, so extremely
+#: long tracking passes are decimated before they reach the filter graph.
+AI_TRACKING_MAX_EXPRESSION_KEYFRAMES = 240
+
+
+def normalize_tracking_keyframes(
+    keyframes: Iterable[dict[str, Any]] | None, source_duration: float = 0.0
+) -> list[dict[str, float]]:
+    """Validate, clamp and order YOLO framing keyframes by time."""
+
+    cleaned: list[dict[str, float]] = []
+    for raw in keyframes or []:
+        try:
+            time_value = float(raw["time"])
+            pan = float(raw.get("pan", 0.0))
+            tilt = float(raw.get("tilt", 0.0))
+            zoom = float(raw.get("zoom", 1.0))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise FFmpegBuildError(
+                "AI tracking keyframes need numeric time/pan/tilt/zoom values"
+            ) from exc
+        if not all(map(math.isfinite, (time_value, pan, tilt, zoom))):
+            raise FFmpegBuildError("AI tracking keyframes must be finite numbers")
+        if time_value < 0:
+            raise FFmpegBuildError("AI tracking keyframes cannot be negative")
+        if source_duration > 0:
+            time_value = min(time_value, source_duration)
+        cleaned.append(
+            {
+                "time": round(time_value, 3),
+                "pan": round(min(180.0, max(-180.0, pan)), 3),
+                "tilt": round(min(90.0, max(-90.0, tilt)), 3),
+                "zoom": round(min(8.0, max(1.0, zoom)), 3),
+            }
+        )
+
+    cleaned.sort(key=lambda frame: frame["time"])
+    deduped: list[dict[str, float]] = []
+    for frame in cleaned:
+        if deduped and abs(deduped[-1]["time"] - frame["time"]) < 1e-3:
+            deduped[-1] = frame
+        else:
+            deduped.append(frame)
+    return deduped
+
+
+def ai_tracking_window(
+    frame_width: int,
+    frame_height: int,
+    keyframe: dict[str, float],
+    *,
+    mode: str = "rectilinear",
+    output_aspect: float = 16 / 9,
+) -> tuple[float, float, float, float]:
+    """Pixel window ``(w, h, x, y)`` for one tracking keyframe.
+
+    ``pan``/``tilt`` are angular offsets from the frame centre.  Spherical
+    sources map yaw across the full 360° equirect width; rectilinear sources map
+    the horizontal offset across the full frame (±180° = ±half width) so the
+    tracker and renderer agree on the same keyframe document.
+    """
+
+    zoom = min(8.0, max(1.0, float(keyframe.get("zoom", 1.0))))
+    pan = float(keyframe.get("pan", 0.0))
+    tilt = float(keyframe.get("tilt", 0.0))
+
+    if mode == "spherical":
+        width = frame_width / zoom
+        height = width / max(output_aspect, 0.1)
+        if height > frame_height:
+            height = frame_height
+            width = min(frame_width, height * output_aspect)
+        centre_x = (0.5 + pan / 360.0) * frame_width
+    else:
+        width = frame_width / zoom
+        height = frame_height / zoom
+        centre_x = (0.5 + pan / 180.0) * frame_width
+
+    centre_y = (0.5 - tilt / 180.0) * frame_height
+    x = min(max(centre_x - width / 2.0, 0.0), frame_width - width)
+    y = min(max(centre_y - height / 2.0, 0.0), frame_height - height)
+    return width, height, x, y
+
+
+def interpolate_expression(
+    points: list[tuple[float, float]], variable: str = "t"
+) -> str:
+    """Piecewise-linear FFmpeg expression through ``(time, value)`` points."""
+
+    if not points:
+        raise FFmpegBuildError("Cannot interpolate an empty point list")
+    if len(points) == 1:
+        return _format_number(points[0][1])
+
+    expression = _format_number(points[-1][1])
+    for index in range(len(points) - 2, -1, -1):
+        start_time, start_value = points[index]
+        end_time, end_value = points[index + 1]
+        span = max(end_time - start_time, 1e-6)
+        slope = (end_value - start_value) / span
+        segment = (
+            f"({_format_number(start_value)}+"
+            f"({variable}-{_format_number(start_time)})*{_format_number(slope, 6)})"
+        )
+        expression = (
+            f"if(lt({variable},{_format_number(end_time)}),{segment},{expression})"
+        )
+    return expression
+
+
+def add_even_rounding(expression: str) -> str:
+    """Keep a pixel expression even for clean yuv420p chroma alignment."""
+
+    return f"trunc(({expression})/2)*2"
+
+
+def sample_tracking_frame(
+    frames: list[dict[str, float]], time_value: float
+) -> dict[str, float]:
+    """Linear interpolation of the tracking keyframe track at ``time_value``."""
+
+    if time_value <= frames[0]["time"]:
+        return dict(frames[0])
+    if time_value >= frames[-1]["time"]:
+        return dict(frames[-1])
+    for previous, following in zip(frames, frames[1:]):
+        if previous["time"] <= time_value <= following["time"]:
+            span = max(following["time"] - previous["time"], 1e-6)
+            ratio = (time_value - previous["time"]) / span
+            return {
+                "time": time_value,
+                "pan": previous["pan"] + (following["pan"] - previous["pan"]) * ratio,
+                "tilt": previous["tilt"] + (following["tilt"] - previous["tilt"]) * ratio,
+                "zoom": previous["zoom"] + (following["zoom"] - previous["zoom"]) * ratio,
+            }
+    return dict(frames[-1])
+
+
+def remap_tracking_keyframes(
+    frames: list[dict[str, float]],
+    segments: list[dict[str, float]] | None,
+    source_duration: float = 0.0,
+) -> list[dict[str, float]]:
+    """Re-time source keyframes onto the concatenated keep-segment timeline.
+
+    ``trim`` + ``setpts=PTS-STARTPTS`` restarts the clip clock, so a keyframe
+    captured at 42 s of the source has to move to its offset inside the cut.
+    """
+
+    cleaned = normalize_segments(segments, source_duration)
+    if not cleaned or not frames:
+        return frames
+
+    remapped: list[dict[str, float]] = []
+    offset = 0.0
+    for segment in cleaned:
+        boundaries = [segment["start"]]
+        boundaries += [
+            frame["time"]
+            for frame in frames
+            if segment["start"] < frame["time"] < segment["end"]
+        ]
+        boundaries.append(segment["end"])
+        for boundary in boundaries:
+            sample = sample_tracking_frame(frames, boundary)
+            sample["time"] = round(offset + (boundary - segment["start"]), 3)
+            remapped.append(sample)
+        offset += segment["end"] - segment["start"]
+    return remapped
+
+
+def build_ai_tracking_filter(options: RenderOptions) -> str | None:
+    """Time-varying ``crop``/``scale`` that follows the tracked subject.
+
+    YOLO runs offline and stores pan/tilt/zoom keyframes; the render itself
+    only evaluates these interpolated expressions, so auto-framing costs no
+    extra inference during encoding.
+    """
+
+    tracking = options.ai_tracking or {}
+    if not tracking.get("enabled"):
+        return None
+
+    mode = str(tracking.get("mode") or "rectilinear").strip().lower()
+    if mode not in AI_TRACKING_MODES:
+        raise FFmpegBuildError(f"Unsupported AI tracking mode: {mode}")
+
+    frames = normalize_tracking_keyframes(
+        tracking.get("keyframes"), options.source_duration
+    )
+    if len(frames) < 2:
+        return None
+    frames = remap_tracking_keyframes(frames, options.segments, options.source_duration)
+    if frames[0]["time"] > 0:
+        # Hold the first framing before its timestamp instead of extrapolating.
+        frames = [{**frames[0], "time": 0.0}, *frames]
+
+    frame_width, frame_height = oriented_dimensions(
+        int(options.source_width or 0), int(options.source_height or 0), options.rotation
+    )
+    if frame_width <= 0 or frame_height <= 0:
+        raise FFmpegBuildError("Source dimensions are required for AI tracking")
+
+    if len(frames) > AI_TRACKING_MAX_EXPRESSION_KEYFRAMES:
+        last = frames[-1]
+        step = len(frames) / float(AI_TRACKING_MAX_EXPRESSION_KEYFRAMES)
+        frames = [
+            frames[min(len(frames) - 1, int(index * step))]
+            for index in range(AI_TRACKING_MAX_EXPRESSION_KEYFRAMES)
+        ]
+        frames[-1] = last
+
+    output_aspect = frame_width / frame_height
+    width_points: list[tuple[float, float]] = []
+    height_points: list[tuple[float, float]] = []
+    x_points: list[tuple[float, float]] = []
+    y_points: list[tuple[float, float]] = []
+    for frame in frames:
+        width, height, x, y = ai_tracking_window(
+            frame_width,
+            frame_height,
+            frame,
+            mode=mode,
+            output_aspect=output_aspect,
+        )
+        width_points.append((frame["time"], width))
+        height_points.append((frame["time"], height))
+        x_points.append((frame["time"], x))
+        y_points.append((frame["time"], y))
+
+    width_expr = add_even_rounding(interpolate_expression(width_points))
+    height_expr = add_even_rounding(interpolate_expression(height_points))
+    x_expr = add_even_rounding(
+        f"min(max({interpolate_expression(x_points)},0),iw-out_w)"
+    )
+    y_expr = add_even_rounding(
+        f"min(max({interpolate_expression(y_points)},0),ih-out_h)"
+    )
+
+    return (
+        f"crop=w='{width_expr}':h='{height_expr}'"
+        f":x='{x_expr}':y='{y_expr}'"
+        # Even pixel rounding nudges the window aspect by <1 px; setsar=1 keeps
+        # the output square-pixel instead of inheriting a stretched SAR.
+        f",scale={_even(frame_width)}:{_even(frame_height)},setsar=1"
+    )
+
+
 def build_filter_graph(options: RenderOptions) -> FilterGraph:
     """Create the video/audio filter graph for the requested transforms.
 
     Order: subtitles (1x) -> trim/concat (keep segments) -> rotate/flip ->
-    crop -> speed. Subtitles are burned before trimming so they stay synced to
-    the original timeline no matter which parts are kept or how fast they play.
+    crop -> AI tracking -> speed. Subtitles are burned before trimming so they
+    stay synced to the original timeline no matter which parts are kept or how
+    fast they play.
     """
 
     speed = validate_speed(options.speed)
@@ -361,6 +613,11 @@ def build_filter_graph(options: RenderOptions) -> FilterGraph:
     if crop_filter:
         statements.append(f"[{video_label}]{crop_filter}[v_crop]")
         video_label = "v_crop"
+
+    tracking_filter = build_ai_tracking_filter(options)
+    if tracking_filter:
+        statements.append(f"[{video_label}]{tracking_filter}[v_ai]")
+        video_label = "v_ai"
 
     if abs(speed - 1.0) > _EPSILON:
         statements.append(f"[{video_label}]setpts=PTS/{_format_number(speed)}[v_speed]")

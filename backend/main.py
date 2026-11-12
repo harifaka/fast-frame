@@ -29,6 +29,7 @@ from routers import ai, filesystem, network, queue
 from services.ai_view_service import TRACKING_MODES
 from services.gpu_service import get_gpu_info
 from services.worker import event_bus, job_manager
+from services.yolo_tracking_service import tracking_service
 
 logging.basicConfig(
     level=logging.INFO,
@@ -170,6 +171,14 @@ async def system_config() -> dict:
             "view_state_endpoint": "/api/ai/view-state",
             "mcp_command_endpoint": "/api/ai/mcp-command",
             "tracking_modes": list(TRACKING_MODES),
+            "tracking": {
+                "enabled": True,
+                "status_endpoint": "/api/ai/tracking/status",
+                "toggle_endpoint": "/api/ai/tracking",
+                "analyze_endpoint": "/api/ai/tracking/analyze",
+                "frame_endpoint": "/api/ai/tracking/frame",
+                "detector": tracking_service.status(),
+            },
         },
         "codecs": [
             {"id": "h264", "label": "H.264 (max compatibility)"},

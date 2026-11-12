@@ -259,3 +259,35 @@ This file records every non-obvious architectural decision made while implementi
 54. **AI framing is preview-only in Phase 8.** Rendering still uses the crop/rotation controls; the
     view selector intentionally does not alter FFmpeg output until a real tracker and projection
     filter are implemented, so the mock cannot silently change rendered files.
+
+## Phase 9 — YOLO auto-framing
+
+55. **Detection runs once, rendering only evaluates expressions.** `yolo_tracking_service` samples the
+    clip at 2 fps (default cap: 180 frames), runs YOLOv8n per sample, smooths the framing and stores
+    pan/tilt/zoom keyframes. `ffmpeg_builder` turns those keyframes into piecewise-linear FFmpeg
+    expressions (`crop=w='trunc(if(lt(t,…),…)/2)*2'` plus a constant `scale`), so enabling
+    auto-framing adds zero inference to the encode and the GPU encoder keeps a fixed frame size.
+56. **One keyframe document, two interpretations.** `pan`/`tilt` are angular offsets from the frame
+    centre. Spherical sources map yaw across the full 360° equirect width; rectilinear sources map
+    the same value across ±180° of the frame, so the tracker, the preview frustum and the FFmpeg
+    expression all agree without a second coordinate system. Keyframes are re-timed onto the
+    concatenated timeline when keep-segments are used.
+57. **Three strength levels are tuning profiles, not code paths.** `LEVEL_PROFILES` defines the
+    smoothing time constant (1.1 s / 0.45 s / 0.15 s), deadband (2.5° / 1° / 0°), maximum camera
+    speed (35 / 90 / 240 °/s), subject margin (55 % / 28 % / 10 %), zoom cap (1.8 / 2.6 / 3.6×) and
+    minimum confidence. Both the analysis smoothing and the rendered framing use the same profile, so
+    switching level and re-analysing gives a genuinely different camera (and the panel re-analyses
+    automatically when keyframes already exist).
+58. **The YOLO runtime is optional and lazily imported.** `ultralytics` is preferred when installed
+    (weights auto-download), otherwise `onnxruntime` with `AI_TRACKING_MODEL`. Neither is imported at
+    process start; `requirements-ai.txt` is installed only with `--build-arg INSTALL_AI_TRACKING=1`
+    (`docker-compose.ai.yml`), keeping the default image unchanged. When no backend is available the
+    API stays healthy, `/api/ai/tracking/status` reports the reason and the UI shows
+    *tracker unavailable* instead of failing.
+59. **The 12 MB model is mounted, not baked.** `docker-compose.ai.yml` mounts `./models` read-only and
+    points `AI_TRACKING_MODEL` at `/models/yolov8n.onnx`; the image only grows by the ~50 MB
+    onnxruntime + numpy wheels and only when the overlay is used.
+60. **Live preview boxes are polled, not streamed.** While auto-framing is enabled the workspace
+    requests one decoded frame every 1.2 s from `/api/ai/tracking/frame`, reusing the existing HTTP
+    API rather than adding a second WebSocket. The overlay is purely diagnostic: it never writes to
+    the framing state, so a paused preview cannot fight an MCP agent for control.

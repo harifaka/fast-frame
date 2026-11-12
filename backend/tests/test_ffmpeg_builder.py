@@ -8,6 +8,8 @@ from pathlib import Path
 from services.ffmpeg_builder import (
     FFmpegBuildError,
     RenderOptions,
+    ai_tracking_window,
+    build_ai_tracking_filter,
     build_atempo_chain,
     build_crop_filter,
     build_ffmpeg_command,
@@ -16,6 +18,8 @@ from services.ffmpeg_builder import (
     compute_crop_pixels,
     escape_subtitle_path,
     normalize_segments,
+    normalize_tracking_keyframes,
+    remap_tracking_keyframes,
     target_duration,
 )
 
@@ -277,6 +281,117 @@ class TransformTests(unittest.TestCase):
         self.assertEqual(order, sorted(order))
         self.assertEqual(graph.video_label, "v_speed")
         self.assertEqual(graph.audio_label, "a_speed")
+
+
+TRACKING_KEYFRAMES = [
+    {"time": 0.0, "pan": -20.0, "tilt": 0.0, "zoom": 1.5},
+    {"time": 5.0, "pan": 30.0, "tilt": 10.0, "zoom": 2.0},
+    {"time": 10.0, "pan": 0.0, "tilt": -10.0, "zoom": 1.0},
+]
+
+
+class AiTrackingFilterTests(unittest.TestCase):
+    def test_disabled_tracking_adds_no_filter(self) -> None:
+        self.assertIsNone(build_ai_tracking_filter(make_options()))
+        self.assertIsNone(
+            build_ai_tracking_filter(
+                make_options(ai_tracking={"enabled": False, "keyframes": TRACKING_KEYFRAMES})
+            )
+        )
+
+    def test_single_keyframe_is_not_animated(self) -> None:
+        options = make_options(
+            ai_tracking={"enabled": True, "keyframes": TRACKING_KEYFRAMES[:1]}
+        )
+        self.assertIsNone(build_ai_tracking_filter(options))
+
+    def test_filter_interpolates_and_normalises_the_output_size(self) -> None:
+        options = make_options(
+            ai_tracking={"enabled": True, "mode": "rectilinear", "keyframes": TRACKING_KEYFRAMES}
+        )
+        tracking_filter = build_ai_tracking_filter(options)
+        self.assertIsNotNone(tracking_filter)
+        assert tracking_filter is not None
+        self.assertTrue(tracking_filter.startswith("crop=w='trunc("))
+        self.assertIn("if(lt(t,5)", tracking_filter)
+        self.assertIn("if(lt(t,10)", tracking_filter)
+        self.assertTrue(tracking_filter.endswith(",scale=1920:1080,setsar=1"))
+
+    def test_graph_places_tracking_after_crop_and_before_speed(self) -> None:
+        options = make_options(
+            speed=2.0,
+            crop={"x": 0.1, "y": 0.1, "w": 0.8, "h": 0.8},
+            ai_tracking={"enabled": True, "keyframes": TRACKING_KEYFRAMES},
+        )
+        graph = build_filter_graph(options)
+        order = [
+            graph.filter_complex.index("crop="),
+            graph.filter_complex.index("[v_ai]"),
+            graph.filter_complex.index("setpts=PTS/2"),
+        ]
+        self.assertEqual(order, sorted(order))
+        self.assertEqual(graph.video_label, "v_speed")
+
+    def test_unknown_mode_is_rejected(self) -> None:
+        with self.assertRaises(FFmpegBuildError):
+            build_ai_tracking_filter(
+                make_options(
+                    ai_tracking={"enabled": True, "mode": "fisheye", "keyframes": TRACKING_KEYFRAMES}
+                )
+            )
+
+    def test_source_dimensions_are_required(self) -> None:
+        with self.assertRaises(FFmpegBuildError):
+            build_ai_tracking_filter(
+                make_options(
+                    source_width=0,
+                    source_height=0,
+                    ai_tracking={"enabled": True, "keyframes": TRACKING_KEYFRAMES},
+                )
+            )
+
+    def test_keyframes_are_sorted_and_clamped(self) -> None:
+        frames = normalize_tracking_keyframes(
+            [
+                {"time": 3, "pan": 500, "tilt": -400, "zoom": 0.1},
+                {"time": 1, "pan": 0, "tilt": 0, "zoom": 1},
+            ],
+            source_duration=2.0,
+        )
+        self.assertEqual([frame["time"] for frame in frames], [1.0, 2.0])
+        self.assertEqual(frames[1]["pan"], 180.0)
+        self.assertEqual(frames[1]["tilt"], -90.0)
+        self.assertEqual(frames[1]["zoom"], 1.0)
+
+    def test_keyframes_must_be_numeric(self) -> None:
+        with self.assertRaises(FFmpegBuildError):
+            normalize_tracking_keyframes([{"time": "soon"}])
+
+    def test_spherical_window_keeps_the_frame_aspect(self) -> None:
+        width, height, _, _ = ai_tracking_window(
+            3840,
+            1920,
+            {"time": 0, "pan": 0, "tilt": 0, "zoom": 2.0},
+            mode="spherical",
+            output_aspect=2.0,
+        )
+        self.assertAlmostEqual(width, 1920.0)
+        self.assertAlmostEqual(height, 960.0)
+
+    def test_window_is_clamped_inside_the_frame(self) -> None:
+        width, height, x, y = ai_tracking_window(
+            1920, 1080, {"time": 0, "pan": 180, "tilt": -90, "zoom": 2.0}
+        )
+        self.assertAlmostEqual(x + width, 1920.0)
+        self.assertAlmostEqual(y + height, 1080.0)
+
+    def test_segments_re_time_the_keyframes(self) -> None:
+        frames = normalize_tracking_keyframes(TRACKING_KEYFRAMES, source_duration=10.0)
+        remapped = remap_tracking_keyframes(frames, [{"start": 2, "end": 6}], 10.0)
+        self.assertEqual(remapped[0]["time"], 0.0)
+        self.assertEqual(remapped[-1]["time"], 4.0)
+        # At t=6 the pan sits 20 % of the way from 30° down to 0°.
+        self.assertAlmostEqual(remapped[-1]["pan"], 24.0)
 
 
 class CommandTests(unittest.TestCase):

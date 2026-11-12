@@ -52,6 +52,7 @@ class RenderOptionsPayload(BaseModel):
     rotation: Literal["none", "90_cw", "90_ccw", "180"] = "none"
     flip_horizontal: bool = False
     crop: CropRegion | None = None
+    ai_tracking: AiTrackingOptions | None = None
     prefer_gpu: bool = True
 
 
@@ -93,6 +94,49 @@ class AiKeyframe(BaseModel):
     zoom: float = Field(default=1.0, ge=0.5, le=8.0)
 
 
+class AiTrackingKeyframe(BaseModel):
+    """One rendered framing sample produced by the YOLO tracker."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    time: float = Field(default=0.0, ge=0, description="Seconds from the clip start")
+    pan: float = Field(default=0.0, ge=-180, le=180)
+    tilt: float = Field(default=0.0, ge=-90, le=90)
+    zoom: float = Field(default=1.0, ge=1.0, le=8.0)
+
+
+class AiTrackingOptions(BaseModel):
+    """AI auto-framing instructions embedded in the render options."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    level: int = Field(default=2, ge=1, le=3)
+    mode: Literal["rectilinear", "spherical"] = "rectilinear"
+    keyframes: list[AiTrackingKeyframe] = Field(default_factory=list)
+
+
+class AiTrackingAnalyzeRequest(BaseModel):
+    """Run the YOLO pass over a source and store the resulting keyframes."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_path: str = Field(min_length=1)
+    level: int | None = Field(default=None, ge=1, le=3)
+    sample_fps: float = Field(default=2.0, gt=0, le=10)
+    max_samples: int = Field(default=180, ge=2, le=1200)
+    force: bool = False
+
+
+class AiTrackingUpdate(BaseModel):
+    """Toggle AI auto-framing or switch its strength level."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool | None = None
+    level: int | None = Field(default=None, ge=1, le=3)
+
+
 class AiViewStateUpdate(BaseModel):
     """Partial framing update; omitted fields keep their current value."""
 
@@ -107,6 +151,10 @@ class AiViewStateUpdate(BaseModel):
     tracking_mode: TrackingMode | None = None
     target: str | None = Field(default=None, max_length=120)
     keyframe_offsets: list[AiKeyframe] | None = None
+    ai_tracking_enabled: bool | None = None
+    ai_tracking_level: int | None = Field(default=None, ge=1, le=3)
+    tracking_keyframes: list[AiTrackingKeyframe] | None = None
+    tracking_analysis: dict | None = None
     source_path: str | None = None
     controller: Literal["ui", "mcp"] | None = None
 
