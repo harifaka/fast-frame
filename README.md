@@ -22,8 +22,8 @@ history live in [`ROADMAP.md`](ROADMAP.md); architectural trade-offs are in
 | **Presets** | Save speed/codec/subtitle-size combos in LocalStorage |
 | **Auto host drives** | Every Windows drive + USB all at once via `/mnt/host/drives`, one-click Quick drives bar, no `.env` |
 | **Network / NAS / URL** | HTTP(S), RTSP, RTMP and WebDAV streams plus SMB/NAS shares as source *or* destination |
-| **Insta360 `.insp` / `.insv`** | Recognised automatically, spherical metadata, neutral 360° preview with an AI framing viewport |
-| **YOLO auto-framing** | Optional ultralight YOLOv8n subject tracking with Smooth / Dynamic / Aggressive levels, rendered as a time-varying crop |
+| **Insta360 `.insp` / `.insv`** | Recognised automatically, spherical metadata, neutral 360° preview you can drag/scroll while it plays, plus automatic horizon levelling |
+| **YOLO auto-framing** | Built-in ultralight YOLO11n subject tracking (Smooth / Dynamic / Aggressive) with weights auto-downloaded on first use |
 
 ---
 
@@ -327,7 +327,14 @@ Insta360 spherical containers are first-class sources. They are listed in the br
 - The preview switches to a neutral equirectangular/rectilinear mode: the still (or first frame)
   is shown with a rule-of-thirds grid and an `AI view` frustum overlay that visualises pan, tilt and
   zoom. Toggle the overlay with the `AI view` chip in the preview header.
-- The `AI VIEW` card in the configuration drawer mirrors the framing state (pan/tilt/zoom/FOV,
+- The 360° preview is interactive **during playback**: drag the frame to look around and scroll to
+  zoom. Each nudge is debounced into the shared framing document, so the AI tracker and MCP agents
+  see exactly the view you left.
+- **Auto-align horizon** (on by default, `Automation → 360° Horizon`) samples the clip with
+  `POST /api/ai/auto-align`, estimates the horizon roll and stores it as `roll` in the framing
+  document. The preview counter-rotates the frame and the render applies the same `rotate` filter;
+  toggle the setting off or press **Reset level** to remove it.
+- The `AI VIEW` card in the configuration drawer mirrors the framing state (pan/tilt/zoom/FOV, roll,
   tracking mode, tracking target, keyframe offsets) and shows a green **MCP AI Control Ready**
   badge. `Simulate AI` nudges the framing like an external agent would; `Keyframe @ mm:ss` records
   the current framing at the playhead.
@@ -373,7 +380,7 @@ How it works:
 
 1. `POST /api/ai/tracking/analyze` samples the clip (default 2 fps, max 180 frames) through
    `backend/services/yolo_tracking_service.py`. Each frame is decoded by FFmpeg as RGB24 and passed
-   to YOLOv8n; people, pets and vehicles are ranked by confidence × area, with continuity from the
+   to YOLO11n; people, pets and vehicles are ranked by confidence × area, with continuity from the
    previous box so the camera does not jump between subjects. Analysis reads seekable local files
    (mounted shares included); live stream URLs are rejected with a clear message.
 2. Box centres are mapped to camera offsets — yaw/pitch on equirectangular `.insp`/`.insv` frames,
@@ -384,19 +391,18 @@ How it works:
    render only evaluates `crop` math per frame — no inference runs during encoding. Keyframes are
    re-timed automatically when multi-cut keep-segments are used.
 
-The detector runtime is **opt-in** so the default image stays slim. Build with the AI overlay and
-drop the exported weights into `./models`:
+The detector runtime ships **in the default image** (numpy + onnxruntime, `INSTALL_AI_TRACKING=1`
+by default). The first analysis downloads the ~11 MB YOLO11n ONNX weights into `AI_TRACKING_MODEL_DIR`
+(`/models`, bind-mounted from `./models` so a container recreate keeps them). Pin your own weights
+by mounting `./models` and setting `AI_TRACKING_MODEL`:
 
 ```bash
-# one-time: export the ~12 MB YOLOv8n ONNX weights on any machine with Python
-pip install ultralytics
-yolo export model=yolov8n.pt format=onnx
-copy yolov8n.onnx models\        # PowerShell (cp on bash)
-
-# build with numpy + onnxruntime (~50 MB) and mount ./models read-only
-docker compose -f docker-compose.yml -f docker-compose.ai.yml up --build -d
+# optional: use a specific model file (Ultralytics export, opset <= 23)
+copy yolo11n.onnx models\
+docker compose -f docker-compose.yml -f docker-compose.ai.yml up -d
 ```
 
+Build with `--build-arg INSTALL_AI_TRACKING=0` for the slim image without AI tracking.
 `GET /api/ai/tracking/status` (and `/api/system/config`) report whether a backend was found and why
 not, so the UI can show an actionable hint instead of failing silently. If the runtime is missing,
 the API still works and `Analyse clip` reports *tracker unavailable*.
@@ -411,7 +417,7 @@ The backend builds a single `filter_complex` in a fixed order:
 [0:v] subtitles (1×, escaped path)
       → trim/setpts per keep-segment          (atrim/asetpts for audio)
       → concat=n=N:v=1:a=1
-      → transpose/hflip
+      → transpose/hflip/rotate  (roll = 360° horizon levelling, size-preserving)
       → crop=w:h:x:y        (even pixels, oriented frame)
       → AI tracking         (time-varying crop/scale from YOLO keyframes, optional)
       → setpts=PTS/speed    (atempo chain for audio)
@@ -458,6 +464,7 @@ Details worth knowing:
 | DELETE | `/api/ai/tracking` | Disable auto-framing and drop tracked keyframes |
 | POST | `/api/ai/tracking/analyze` | Sample the clip, track the subject, store keyframes |
 | GET | `/api/ai/tracking/frame?path=…&time=…` | Single-frame detection for the preview overlay |
+| POST | `/api/ai/auto-align` | Detect (and optionally apply) the horizon levelling roll of a 360° source |
 | POST | `/api/queue/add` | Queue/render a job (`render_now: true` jumps the queue) |
 | GET | `/api/queue` | Jobs, processing id, queue depth |
 | DELETE | `/api/queue/{id}` | Cancel queued/running job or dismiss a finished one |
@@ -481,6 +488,7 @@ Example job:
     "rotation": "90_cw",
     "flip_horizontal": false,
     "crop": { "x": 0.1, "y": 0.1, "w": 0.8, "h": 0.8 },
+    "roll": -2.4,
     "ai_tracking": { "enabled": true, "level": 2, "mode": "subject" },
     "prefer_gpu": true
   }
@@ -528,12 +536,14 @@ Environment variables:
 | `FFMPEG_BIN` | `ffmpeg` | FFmpeg executable (full path allowed) |
 | `FFPROBE_BIN` | `ffprobe` | ffprobe executable |
 | `AI_TRACKING_BACKEND` | `auto` | `auto`, `ultralytics` or `onnx` |
-| `AI_TRACKING_MODEL` | — | Path to `yolov8n.onnx` (or `yolov8n.pt` for ultralytics) |
+| `AI_TRACKING_MODEL` | — | Path to a YOLO `.onnx` (or `.pt` for ultralytics); empty auto-downloads |
+| `AI_TRACKING_MODEL_DIR` | `/models` | Cache directory for the auto-downloaded weights |
+| `AI_TRACKING_MODEL_URL` | Ultralytics YOLO11n asset | Override the weights download |
 
-YOLO auto-framing needs one of the optional runtimes: `pip install -r backend/requirements-ai.txt`
-(onnxruntime + numpy, then point `AI_TRACKING_MODEL` at an exported ONNX model) or
-`pip install ultralytics` (torch, weights auto-download). Without either, everything else still
-works and `/api/ai/tracking/status` explains what is missing.
+The default image already contains `onnxruntime` + numpy. If you built with
+`--build-arg INSTALL_AI_TRACKING=0`, reinstall with `pip install -r backend/requirements-ai.txt`
+or `pip install ultralytics`; without either, everything else still works and
+`/api/ai/tracking/status` explains what is missing.
 
 Tests (stdlib `unittest`, no FFmpeg required; the ONNX post-processing tests skip when numpy is not
 installed):
@@ -584,18 +594,19 @@ fast-frame/
 ├── Dockerfile                 # 2-stage slim build (Node 20 builder -> Python 3.11 + FFmpeg + NVENC env)
 ├── docker-compose.yml         # GPU passthrough + automatic host drive mounts
 ├── docker-compose.cpu.yml     # CPU-only override (gpus: []) for machines without NVIDIA drivers
-├── docker-compose.ai.yml      # YOLO auto-framing overlay (numpy + onnxruntime, mounts ./models)
-├── models/                    # Put the exported yolov8n.onnx here (~12 MB, not baked into the image)
+├── docker-compose.ai.yml      # Optional overlay pinning a specific ONNX model file
+├── models/                    # Auto-downloaded YOLO weights (or your own yolo11n.onnx)
 ├── .github/workflows/release.yml  # push to main -> GHCR image + v<commit-count> release
 ├── backend/
 │   ├── main.py                # FastAPI app, WebSocket, static frontend
 │   ├── config.py              # Mount root, drive shortcuts, path-traversal defence
 │   ├── models.py              # Pydantic job/options + AI framing models
-│   ├── requirements-ai.txt    # Optional numpy/onnxruntime for YOLO tracking
+│   ├── requirements-ai.txt    # numpy/onnxruntime for YOLO tracking (installed by default)
 │   ├── routers/{filesystem,network,queue,ai}.py
 │   └── services/
 │       ├── ai_view_service.py # AI framing state + MCP command handling
-│       ├── yolo_tracking_service.py # YOLOv8n detection, 3 strength levels, keyframe generation
+│       ├── horizon_service.py # 360° horizon roll estimation and levelling
+│       ├── yolo_tracking_service.py # YOLO detection, 3 strength levels, keyframe generation
 │       ├── ffmpeg_builder.py  # filter_complex + NVENC command builder
 │       ├── ffprobe_service.py # metadata extraction
 │       ├── gpu_service.py     # nvidia-smi + encoder detection

@@ -210,6 +210,17 @@ class TransformTests(unittest.TestCase):
         graph = build_filter_graph(options)
         self.assertIn("[0:v:0]transpose=1,hflip[v_transform]", graph.filter_complex)
 
+    def test_horizon_roll_adds_size_preserving_rotate(self) -> None:
+        options = make_options(speed=1.0, roll=-3.5)
+        filters = build_transform_filters(options)
+        self.assertEqual(
+            filters, ["rotate=(-3.5*PI/180):ow=iw:oh=ih:fillcolor=black"]
+        )
+        self.assertIn("rotate=(-3.5*PI/180)", build_filter_graph(options).filter_complex)
+
+    def test_zero_roll_keeps_the_filter_graph_untouched(self) -> None:
+        self.assertEqual(build_transform_filters(make_options(speed=1.0, roll=0.0)), [])
+
     def test_crop_uses_oriented_dimensions_after_rotation(self) -> None:
         options = make_options(
             speed=1.0,

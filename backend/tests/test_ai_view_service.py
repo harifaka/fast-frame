@@ -212,6 +212,21 @@ class AiTrackingStateTests(unittest.TestCase):
         self.assertIsNone(cleared["tracking_analysis"])
         self.assertEqual(cleared["tracking_keyframes"], [])
 
+    def test_horizon_alignment_and_roll_are_tracked(self) -> None:
+        alignment = {"roll": -3.2, "confidence": 0.8, "reliable": True}
+        state = self.manager.update({"roll": -3.2, "horizon_alignment": alignment})
+        alignment["roll"] = 99.0
+        self.assertEqual(state["roll"], -3.2)
+        self.assertEqual(state["horizon_alignment"]["roll"], -3.2)
+        self.assertEqual(state["endpoints"]["auto_align"], "/api/ai/auto-align")
+
+        with self.assertRaises(AiViewError):
+            self.manager.update({"horizon_alignment": "nope"})
+
+        cleared = self.manager.update({"roll": 0, "horizon_alignment": None})
+        self.assertIsNone(cleared["horizon_alignment"])
+        self.assertEqual(cleared["roll"], 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

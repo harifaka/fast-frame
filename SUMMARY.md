@@ -160,6 +160,24 @@ Full setup, troubleshooting and API docs: [`README.md`](README.md). Every autono
   numpy + onnxruntime runtime (~50 MB) and mounts `./models` read-only for the ~12 MB ONNX weights.
   Without a backend the API stays healthy and reports why the tracker is unavailable.
 
+### Phase 10 — Interactive 360° preview, horizon auto-align & default AI runtime
+- **Steerable preview:** the `AI view` overlay in `VideoWorkspace.jsx` accepts pointer drags
+  (horizontal = pan, vertical = tilt) and wheel zoom, committing throttled updates to
+  `/api/ai/view-state` while the clip keeps playing; a tap without movement still toggles playback.
+- **Horizon auto-align:** `backend/services/horizon_service.py` samples the clip, shears the frame by
+  every candidate angle (−20°…+20°) and picks the angle that collapses the horizon's vertical
+  gradient into one row. `POST /api/ai/auto-align` stores the confidence-weighted median as `roll`
+  plus a `horizon_alignment` summary (confidence, per-frame samples) in the framing document.
+- **Preview + render parity:** the preview counter-rotates the video by `roll`, and
+  `options.roll` adds a size-preserving `rotate=…:ow=iw:oh=ih` filter to the FFmpeg graph.
+- **Settings:** `Automation → 360° Horizon` holds the auto-align toggle (on by default),
+  `Detect horizon`, `Reset level` and the roll/confidence readout; selecting a spherical source
+  auto-aligns it, and switching the toggle off clears the correction.
+- **AI works out of the box:** the default image now installs numpy + onnxruntime 1.31.1
+  (`INSTALL_AI_TRACKING=1`), and `yolo_tracking_service` downloads the YOLO11n ONNX weights once into
+  `/models` (bind-mounted from `./models`) when `AI_TRACKING_MODEL` is empty. `docker-compose.ai.yml`
+  is now only needed to pin a specific model file.
+
 ---
 
 ## Verification performed

@@ -52,6 +52,12 @@ class RenderOptionsPayload(BaseModel):
     rotation: Literal["none", "90_cw", "90_ccw", "180"] = "none"
     flip_horizontal: bool = False
     crop: CropRegion | None = None
+    roll: float = Field(
+        default=0.0,
+        ge=-45,
+        le=45,
+        description="Horizon levelling correction in degrees (spherical sources)",
+    )
     ai_tracking: AiTrackingOptions | None = None
     prefer_gpu: bool = True
 
@@ -137,6 +143,17 @@ class AiTrackingUpdate(BaseModel):
     level: int | None = Field(default=None, ge=1, le=3)
 
 
+class AiAutoAlignRequest(BaseModel):
+    """Detect (and optionally apply) the horizon levelling roll."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_path: str = Field(min_length=1)
+    apply: bool = True
+    samples: int = Field(default=3, ge=1, le=12)
+    force: bool = False
+
+
 class AiViewStateUpdate(BaseModel):
     """Partial framing update; omitted fields keep their current value."""
 
@@ -155,6 +172,7 @@ class AiViewStateUpdate(BaseModel):
     ai_tracking_level: int | None = Field(default=None, ge=1, le=3)
     tracking_keyframes: list[AiTrackingKeyframe] | None = None
     tracking_analysis: dict | None = None
+    horizon_alignment: dict | None = None
     source_path: str | None = None
     controller: Literal["ui", "mcp"] | None = None
 

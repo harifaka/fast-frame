@@ -293,3 +293,24 @@ This file records every non-obvious architectural decision made while implementi
     requests one decoded frame every 1.2 s from `/api/ai/tracking/frame`, reusing the existing HTTP
     API rather than adding a second WebSocket. The overlay is purely diagnostic: it never writes to
     the framing state, so a paused preview cannot fight an MCP agent for control.
+
+## Phase 10 — Interactive 360° preview & horizon auto-align
+
+61. **Preview steering goes through the same framing document.** Drag/wheel input is debounced to
+    ~8 updates per second and sent as ordinary `view-state` patches (pan/tilt/zoom/active), so the
+    preview, the AI tracker and MCP agents never hold divergent views and no separate "preview
+    camera" state had to be invented. A pointer-up flush guarantees the final position is stored.
+62. **Horizon levelling is a shear-peak search, not a CNN.** For each candidate angle the frame is
+    sheared vertically and the row-gradient peak/median ratio is measured; a level horizon
+    concentrates the gradient in one row. This is fast (~0.15 s per 640 px frame), deterministic, and
+    testable with synthetic tilted frames; the confidence-weighted median across sampled frames
+    suppresses ambiguous frames. Noise-only frames fall below the confidence floor and are ignored.
+63. **`roll` is a visual transform in both preview and render.** The preview applies
+    `rotate(roll deg)` to the video element and the renderer inserts `rotate=…:ow=iw:oh=ih` (same
+    sign convention), so the exported file matches what the operator approved. The filter preserves
+    frame dimensions, keeping crop and AI-tracking coordinates valid.
+64. **AI runtime is no longer opt-in.** The default image installs onnxruntime + numpy, and the
+    ONNX weights download once into `AI_TRACKING_MODEL_DIR` (`/models`, bind-mounted from `./models`)
+    when no path is configured. A missing download leaves the rest of the app healthy and the status
+    endpoint explains the failure, but a stock `docker compose up --build` now yields a working
+    tracker instead of the previous "ultralytics/onnxruntime not installed" dead end.

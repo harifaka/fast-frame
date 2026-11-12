@@ -65,3 +65,8 @@ Thumbs.db
 tools/
 media/*
 !media/.gitkeep
+
+# Auto-downloaded YOLO weights (see AI_TRACKING_MODEL / docker-compose.yml)
+models/*.onnx
+models/*.pt
+!models/.gitkeep

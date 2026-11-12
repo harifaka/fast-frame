@@ -114,12 +114,16 @@ export default function VideoWorkspace({
   currentTime,
   videoRef,
   aiView,
+  onAiViewChange,
   children,
 }) {
   const containerRef = useRef(null)
   const stageRef = useRef(null)
   const overlayRef = useRef(null)
   const dragRef = useRef(null)
+  const viewDragRef = useRef(null)
+  const viewCommitRef = useRef({ timer: null, last: 0, pending: null })
+  const [viewDraft, setViewDraft] = useState(null)
   const [box, setBox] = useState({ width: 0, height: 0 })
   const [playing, setPlaying] = useState(false)
   const [duration, setDuration] = useState(0)
@@ -151,14 +155,19 @@ export default function VideoWorkspace({
   const aiTilt = Number(aiView?.tilt) || 0
   const aiZoom = clamp(Number(aiView?.zoom) || 1, 0.5, 8)
   const aiFov = clamp(Number(aiView?.fov) || 90, 20, 140)
+  const aiRoll = clamp(Number(aiView?.roll) || 0, -45, 45)
+
+  const effectivePan = viewDraft ? viewDraft.pan : aiPan
+  const effectiveTilt = viewDraft ? viewDraft.tilt : aiTilt
+  const effectiveZoom = viewDraft ? viewDraft.zoom : aiZoom
 
   const aiFrustum = useMemo(() => {
-    const widthPct = clamp((aiFov / 180) * 100 / aiZoom, 10, 96)
+    const widthPct = clamp((aiFov / 180) * 100 / effectiveZoom, 10, 96)
     const heightPct = clamp(widthPct * 0.55, 10, 96)
-    const left = clamp(50 + (aiPan / 180) * 50 - widthPct / 2, 0, 100 - widthPct)
-    const top = clamp(50 - (aiTilt / 90) * 50 - heightPct / 2, 0, 100 - heightPct)
+    const left = clamp(50 + (effectivePan / 180) * 50 - widthPct / 2, 0, 100 - widthPct)
+    const top = clamp(50 - (effectiveTilt / 90) * 50 - heightPct / 2, 0, 100 - heightPct)
     return { widthPct, heightPct, left, top }
-  }, [aiFov, aiZoom, aiPan, aiTilt])
+  }, [aiFov, effectiveZoom, effectivePan, effectiveTilt])
 
   useEffect(() => {
     const element = containerRef.current
@@ -260,6 +269,126 @@ export default function VideoWorkspace({
 
   const seekBy = useCallback((delta) => seek((videoRef?.current?.currentTime || 0) + delta), [seek, videoRef])
 
+  // Debounced framing commits while the user drags or scrolls the 360 preview.
+  const queueViewCommit = useCallback(
+    (patch, immediate = false) => {
+      if (!onAiViewChange) return
+      viewCommitRef.current.pending = { ...(viewCommitRef.current.pending || {}), ...patch }
+      const flush = () => {
+        const pending = viewCommitRef.current.pending
+        viewCommitRef.current.pending = null
+        viewCommitRef.current.last = Date.now()
+        if (pending) onAiViewChange(pending)
+      }
+      if (immediate) {
+        if (viewCommitRef.current.timer) {
+          window.clearTimeout(viewCommitRef.current.timer)
+          viewCommitRef.current.timer = null
+        }
+        flush()
+        return
+      }
+      const elapsed = Date.now() - viewCommitRef.current.last
+      if (elapsed >= 120) {
+        flush()
+      } else if (!viewCommitRef.current.timer) {
+        viewCommitRef.current.timer = window.setTimeout(() => {
+          viewCommitRef.current.timer = null
+          flush()
+        }, 120 - elapsed)
+      }
+    },
+    [onAiViewChange],
+  )
+
+  useEffect(
+    () => () => {
+      if (viewCommitRef.current.timer) window.clearTimeout(viewCommitRef.current.timer)
+    },
+    [],
+  )
+
+  const startViewDrag = (event) => {
+    if (!isSpherical || !onAiViewChange) return
+    if (event.button !== undefined && event.button > 0) return
+    const rect = stageRef.current?.getBoundingClientRect()
+    if (!rect) return
+    event.preventDefault()
+    try {
+      event.currentTarget.setPointerCapture?.(event.pointerId)
+    } catch {
+      /* pointer capture not available */
+    }
+    viewDragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      startPan: effectivePan,
+      startTilt: effectiveTilt,
+      pan: effectivePan,
+      tilt: effectiveTilt,
+      zoom: effectiveZoom,
+      moved: 0,
+      rect,
+    }
+    setViewDraft({ pan: effectivePan, tilt: effectiveTilt, zoom: effectiveZoom })
+  }
+
+  const moveViewDrag = (event) => {
+    const drag = viewDragRef.current
+    if (!drag) return
+    const dx = event.clientX - drag.startX
+    const dy = event.clientY - drag.startY
+    drag.moved = Math.max(drag.moved, Math.abs(dx) + Math.abs(dy))
+    const pan = Number(clamp(drag.startPan - (dx / Math.max(drag.rect.width, 1)) * 220, -180, 180).toFixed(2))
+    const tilt = Number(clamp(drag.startTilt + (dy / Math.max(drag.rect.height, 1)) * 110, -90, 90).toFixed(2))
+    drag.pan = pan
+    drag.tilt = tilt
+    setViewDraft({ pan, tilt, zoom: drag.zoom })
+    queueViewCommit({ pan, tilt, zoom: drag.zoom, active: true })
+  }
+
+  const endViewDrag = (event) => {
+    const drag = viewDragRef.current
+    if (!drag) return
+    viewDragRef.current = null
+    try {
+      if (event?.currentTarget?.hasPointerCapture?.(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId)
+      }
+    } catch {
+      /* pointer already released */
+    }
+    if (drag.moved < 4) {
+      togglePlay()
+      return
+    }
+    queueViewCommit(
+      { pan: drag.pan, tilt: drag.tilt, zoom: drag.zoom, active: true },
+      true,
+    )
+  }
+
+  // Clear the local draft as soon as the server state catches up.
+  useEffect(() => {
+    if (!viewDragRef.current) setViewDraft(null)
+  }, [aiView?.revision, aiView?.updated_at])
+
+  useEffect(() => {
+    const element = stageRef.current
+    if (!element || !isSpherical || !onAiViewChange) return undefined
+    const handleWheel = (event) => {
+      event.preventDefault()
+      const nextZoom = Number(
+        clamp(aiZoom * (event.deltaY > 0 ? 0.92 : 1.08), 0.5, 8).toFixed(2),
+      )
+      setViewDraft({ pan: aiPan, tilt: aiTilt, zoom: nextZoom })
+      queueViewCommit({ zoom: nextZoom, active: true })
+    }
+    element.addEventListener('wheel', handleWheel, { passive: false })
+    return () => element.removeEventListener('wheel', handleWheel)
+  }, [isSpherical, aiZoom, aiPan, aiTilt, onAiViewChange, queueViewCommit])
+
   useEffect(() => {
     if (!sourcePath) return undefined
     const handleKey = (event) => {
@@ -293,7 +422,7 @@ export default function VideoWorkspace({
 
   const videoTransform = `translate(-50%, -50%) ${
     settings?.flipHorizontal ? 'scaleX(-1) ' : ''
-  }rotate(${rotationDegrees}deg)`
+  }rotate(${rotationDegrees + aiRoll}deg)`
 
   const isTransformed = rotation !== 'none' || settings?.flipHorizontal
 
@@ -539,7 +668,7 @@ export default function VideoWorkspace({
                 alt={metadata?.name || 'Spherical still'}
                 className="absolute inset-0 h-full w-full bg-black object-contain"
                 style={{
-                  transform: `${settings?.flipHorizontal ? 'scaleX(-1) ' : ''}rotate(${rotationDegrees}deg)`,
+                  transform: `${settings?.flipHorizontal ? 'scaleX(-1) ' : ''}rotate(${rotationDegrees + aiRoll}deg)`,
                 }}
                 onError={() => setVideoError('The spherical still could not be decoded by this browser.')}
                 onClick={togglePlay}
@@ -573,13 +702,19 @@ export default function VideoWorkspace({
 
             {isSpherical && showAiView && (
               <div
-                className="pointer-events-none absolute inset-0"
+                className={`absolute inset-0 touch-none ${
+                  onAiViewChange ? 'pointer-events-auto cursor-grab active:cursor-grabbing' : 'pointer-events-none'
+                }`}
                 aria-label="Neutral AI framing viewport"
                 data-active={aiActive}
+                onPointerDown={startViewDrag}
+                onPointerMove={moveViewDrag}
+                onPointerUp={endViewDrag}
+                onPointerCancel={endViewDrag}
               >
-                <div className="absolute inset-0 bg-[linear-gradient(rgba(148,163,184,0.10)_1px,transparent_1px),linear-gradient(90deg,rgba(148,163,184,0.10)_1px,transparent_1px)] bg-[size:10%_20%] opacity-70" />
+                <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(rgba(148,163,184,0.10)_1px,transparent_1px),linear-gradient(90deg,rgba(148,163,184,0.10)_1px,transparent_1px)] bg-[size:10%_20%] opacity-70" />
                 <div
-                  className={`absolute border ${
+                  className={`pointer-events-none absolute border ${
                     aiActive
                       ? 'border-emerald-400/90 shadow-[0_0_0_1px_rgba(52,211,153,0.25),0_0_28px_rgba(52,211,153,0.18)]'
                       : 'border-accent-400/70'
@@ -596,7 +731,7 @@ export default function VideoWorkspace({
                       aiActive ? 'bg-emerald-500/90 text-slate-950' : 'bg-black/70 text-accent-200'
                     }`}
                   >
-                    AI view {aiFov.toFixed(0)}° · {aiZoom.toFixed(1)}×
+                    AI view {aiFov.toFixed(0)}° · {effectiveZoom.toFixed(1)}×
                   </span>
                   <Crosshair className="absolute left-1/2 top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 text-white/60" />
                   {['-left-1 -top-1', '-right-1 -top-1', '-bottom-1 -left-1', '-bottom-1 -right-1'].map(
@@ -610,9 +745,11 @@ export default function VideoWorkspace({
                     ),
                   )}
                 </div>
-                <span className="absolute bottom-2 left-2 flex items-center gap-1.5 rounded bg-black/70 px-2 py-1 font-mono text-[9px] uppercase tracking-wider text-slate-300">
+                <span className="pointer-events-none absolute bottom-2 left-2 flex items-center gap-1.5 rounded bg-black/70 px-2 py-1 font-mono text-[9px] uppercase tracking-wider text-slate-300">
                   <Sparkles className="h-3 w-3 text-accent-300" />
-                  Neutral rectilinear preview · pan {aiPan.toFixed(0)}° / tilt {aiTilt.toFixed(0)}°
+                  pan {effectivePan.toFixed(0)}° / tilt {effectiveTilt.toFixed(0)}°
+                  {Math.abs(aiRoll) >= 0.1 ? ` / level ${aiRoll.toFixed(1)}°` : ''}
+                  <span className="text-slate-500">· drag to look · scroll to zoom</span>
                 </span>
               </div>
             )}

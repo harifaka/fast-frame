@@ -6,9 +6,9 @@ The service has two halves:
   three strength profiles and the smoothing/keyframe generation.  It is
   stdlib-only so it can be unit-tested without numpy or a model.
 * **Detection backends** - ``ultralytics`` when the package is installed, or
-  ``onnxruntime`` with an exported YOLOv8n ``.onnx`` file.  Both are imported
-  lazily so a slim image without the AI extras keeps working; the UI simply
-  reports the tracker as unavailable with an actionable reason.
+  ``onnxruntime`` with YOLO ONNX weights.  The ONNX weights are downloaded once
+  on first use when ``AI_TRACKING_MODEL`` is empty, so the runtime installed by
+  the default image works without a manual model export.
 
 Tracking is an *offline* pass: frames are sampled at a low rate once, resolved
 into ``pan``/``tilt``/``zoom`` keyframes, and the render itself only evaluates
@@ -21,8 +21,11 @@ import json
 import logging
 import math
 import os
+import shutil
 import subprocess
+import tempfile
 import threading
+import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,6 +42,17 @@ DEFAULT_MAX_SAMPLES = 180
 MAX_KEYFRAMES = 1200
 FRAME_EXTRACT_TIMEOUT = 30.0
 DEFAULT_OUTPUT_ASPECT = 16.0 / 9.0
+
+#: ONNX weights fallback.  Ultralytics publishes YOLO11n (same ``(1, 84, N)``
+#: output as YOLOv8n) in their release assets, so the tracker can download it
+#: on first use instead of requiring a manual export.
+DEFAULT_MODEL_NAME = "yolo11n.onnx"
+DEFAULT_MODEL_URL = os.environ.get(
+    "AI_TRACKING_MODEL_URL",
+    "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.onnx",
+)
+DEFAULT_MODEL_DIR = os.environ.get("AI_TRACKING_MODEL_DIR", "/models")
+MODEL_DOWNLOAD_TIMEOUT = 120.0
 
 #: COCO classes the framer is willing to follow (people, pets, vehicles).
 TRACKABLE_CLASSES = frozenset(
@@ -807,16 +821,11 @@ class YoloTrackingService:
             except Exception as exc:  # pragma: no cover - depends on install
                 errors.append(f"onnxruntime not installed ({exc.__class__.__name__})")
             else:
-                model = self._model_path or ""
-                if not model:
-                    errors.append(
-                        "AI_TRACKING_MODEL is not set (expected a yolov8n.onnx path)"
-                    )
-                else:
-                    try:
-                        return OnnxRuntimeDetector(model)
-                    except Exception as exc:
-                        errors.append(f"onnxruntime failed to load the model: {exc}")
+                try:
+                    model = self._ensure_model()
+                    return OnnxRuntimeDetector(str(model))
+                except Exception as exc:
+                    errors.append(f"onnxruntime backend unavailable: {exc}")
 
         if preference not in {"auto", "ultralytics", "onnx", "onnxruntime"}:
             errors.insert(0, f"unknown AI_TRACKING_BACKEND '{preference}'")
@@ -825,6 +834,61 @@ class YoloTrackingService:
         )
         logger.info("AI tracking unavailable: %s", self._unavailable_reason)
         return None
+
+    # ---------------------------------------------------------------- model
+    def _model_cache_path(self) -> Path:
+        """First writable cache location for the auto-downloaded weights."""
+
+        candidates = [Path(DEFAULT_MODEL_DIR), Path(tempfile.gettempdir()) / "fast-frame-models"]
+        for directory in candidates:
+            try:
+                directory.mkdir(parents=True, exist_ok=True)
+                probe = directory / ".write-test"
+                probe.write_bytes(b"")
+                probe.unlink()
+            except OSError:
+                continue
+            return directory / DEFAULT_MODEL_NAME
+        return Path(tempfile.gettempdir()) / DEFAULT_MODEL_NAME
+
+    def _ensure_model(self) -> Path:
+        """Return usable ONNX weights, downloading them once when needed."""
+
+        if self._model_path:
+            return Path(self._model_path)
+
+        target = self._model_cache_path()
+        if target.is_file() and target.stat().st_size > 0:
+            self._model_path = str(target)
+            return target
+
+        if not DEFAULT_MODEL_URL:
+            raise TrackingError(
+                "AI_TRACKING_MODEL is not set and AI_TRACKING_MODEL_URL is empty"
+            )
+
+        logger.info("Downloading YOLO model %s -> %s", DEFAULT_MODEL_URL, target)
+        partial = target.with_suffix(target.suffix + ".part")
+        try:
+            with urllib.request.urlopen(
+                DEFAULT_MODEL_URL, timeout=MODEL_DOWNLOAD_TIMEOUT
+            ) as response, open(partial, "wb") as handle:
+                shutil.copyfileobj(response, handle, length=1 << 20)
+            if partial.stat().st_size == 0:
+                raise TrackingError("downloaded model was empty")
+            partial.replace(target)
+        except Exception as exc:
+            try:
+                partial.unlink()
+            except OSError:
+                pass
+            raise TrackingError(
+                f"could not download the YOLO model from {DEFAULT_MODEL_URL}: {exc}"
+            ) from exc
+
+        self._model_path = str(target)
+        return target
+
 
     @property
     def unavailable_reason(self) -> str:
@@ -845,6 +909,7 @@ class YoloTrackingService:
                     "model": self._model_path or None,
                     "reason": "Loading the YOLO runtime…",
                     "preference": self._backend_preference,
+                    "model_url": DEFAULT_MODEL_URL or None,
                     "default_level": DEFAULT_LEVEL,
                     "levels": [
                         LEVEL_PROFILES[level].as_dict() for level in sorted(LEVEL_PROFILES)
@@ -859,6 +924,7 @@ class YoloTrackingService:
             "model": detector.model if detector else (self._model_path or None),
             "reason": None if detector else self.unavailable_reason,
             "preference": self._backend_preference,
+            "model_url": DEFAULT_MODEL_URL or None,
             "default_level": DEFAULT_LEVEL,
             "levels": [LEVEL_PROFILES[level].as_dict() for level in sorted(LEVEL_PROFILES)],
             "trackable_classes": sorted(TRACKABLE_CLASSES),

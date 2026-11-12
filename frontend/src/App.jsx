@@ -22,6 +22,7 @@ const DEFAULT_SETTINGS = {
   flipHorizontal: false,
   crop: null,
   preferGpu: true,
+  autoAlignHorizon: true,
 }
 
 const ACTIVE_STATUSES = new Set(['processing', 'cancelling'])
@@ -59,6 +60,13 @@ export default function App() {
   const [aiViewError, setAiViewError] = useState(null)
   const [aiAnalyzing, setAiAnalyzing] = useState(false)
   const [aiAnalyzeError, setAiAnalyzeError] = useState(null)
+  const [aiAutoAligning, setAiAutoAligning] = useState(false)
+  const [aiAutoAlignError, setAiAutoAlignError] = useState(null)
+  const settingsRef = useRef(settings)
+
+  useEffect(() => {
+    settingsRef.current = settings
+  }, [settings])
 
   const openConfig = useCallback((section = null) => {
     setQueueOpen(false)
@@ -182,6 +190,28 @@ export default function App() {
     [aiView?.ai_tracking_level, sourcePath],
   )
 
+  const runAutoAlign = useCallback(
+    async (path = sourcePath, apply = true) => {
+      if (!path) {
+        setAiAutoAlignError('Select a 360° source before auto-aligning the horizon.')
+        return null
+      }
+      setAiAutoAligning(true)
+      setAiAutoAlignError(null)
+      try {
+        const result = await api.autoAlignHorizon({ source_path: path, apply, samples: 3 })
+        if (result?.view_state) setAiView(result.view_state)
+        return result
+      } catch (error) {
+        setAiAutoAlignError(error.message)
+        return null
+      } finally {
+        setAiAutoAligning(false)
+      }
+    },
+    [sourcePath],
+  )
+
   const loadGpu = useCallback(async (refresh = false) => {
     setRefreshing(true)
     setGpuError(null)
@@ -299,11 +329,12 @@ export default function App() {
         setMetadata(meta)
         setCurrentTime(0)
         const sphericalSource = Boolean(meta.spherical)
-        updateAiView({
+        await updateAiView({
           active: sphericalSource,
           source_path: path,
           pan: 0,
           tilt: 0,
+          roll: 0,
           zoom: 1,
           fov: 90,
           tracking_mode: sphericalSource ? 'manual' : 'off',
@@ -312,7 +343,11 @@ export default function App() {
           ai_tracking_enabled: false,
           tracking_keyframes: [],
           tracking_analysis: null,
+          horizon_alignment: null,
         })
+        if (sphericalSource && settingsRef.current.autoAlignHorizon) {
+          runAutoAlign(path, true)
+        }
         setSettings((previous) => ({
           ...previous,
           rotation: meta.suggested_rotation || 'none',
@@ -330,8 +365,20 @@ export default function App() {
         setMetadataLoading(false)
       }
     },
-    [loadSubtitles, updateAiView],
+    [loadSubtitles, runAutoAlign, updateAiView],
   )
+
+  const previousAutoAlign = useRef(settings.autoAlignHorizon)
+  useEffect(() => {
+    const was = previousAutoAlign.current
+    previousAutoAlign.current = settings.autoAlignHorizon
+    if (was === settings.autoAlignHorizon || !metadata?.spherical || !sourcePath) return
+    if (settings.autoAlignHorizon) {
+      runAutoAlign(sourcePath, true)
+    } else {
+      updateAiView({ roll: 0 })
+    }
+  }, [metadata?.spherical, runAutoAlign, settings.autoAlignHorizon, sourcePath, updateAiView])
 
   const addSegment = useCallback((segment) => {
     setSettings((previous) => ({
@@ -385,6 +432,7 @@ export default function App() {
             rotation: settings.rotation,
             flip_horizontal: settings.flipHorizontal,
             crop: settings.crop,
+            roll: metadata?.spherical ? Number(aiView?.roll) || 0 : 0,
             ai_tracking:
               aiView?.ai_tracking_enabled && (aiView?.tracking_keyframes?.length || 0) > 1
                 ? {
@@ -539,6 +587,7 @@ export default function App() {
             currentTime={currentTime}
             videoRef={videoRef}
             aiView={aiView}
+            onAiViewChange={updateAiView}
           >
             <Timeline
               duration={metadata?.duration || 0}
@@ -615,6 +664,9 @@ export default function App() {
         aiTrackingError={aiAnalyzeError}
         aiViewEndpoint={appConfig?.ai_view?.view_state_endpoint || '/api/ai/view-state'}
         currentTime={currentTime}
+        onAutoAlign={() => runAutoAlign(sourcePath, true)}
+        autoAligning={aiAutoAligning}
+        autoAlignError={aiAutoAlignError}
       />
     </div>
   )

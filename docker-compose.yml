@@ -30,6 +30,9 @@ services:
       - C:/:/mnt/host/c
       # Portable default: anything dropped into ./media shows up under /mnt/host/media.
       - ./media:/mnt/host/media
+      # YOLO ONNX weights auto-downloaded on first detection (kept on the host
+      # so a container recreate does not download them again).
+      - ./models:/models
       # Kernel-level SMB mounts live here; a volume keeps them off your media folders.
       - fast-frame-network:/mnt/host/network
       # Linux hosts: replace the two Windows mounts above with e.g.

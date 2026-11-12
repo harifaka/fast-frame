@@ -54,6 +54,7 @@ verified; the detailed specifications in section 4 are kept as the regression co
 | 7 | Auto-mounted host drives, network/SMB sources & slim multi-stage image | ✅ Implemented |
 | 8 | Insta360 `.insp` support & mock AI view selector (MCP-ready) | ✅ Implemented |
 | 9 | Ultra-lightweight YOLO tracking & 360° smart framing (3 strength levels) | ✅ Implemented |
+| 10 | Interactive 360° preview, horizon auto-align & out-of-the-box AI runtime | ✅ Implemented |
 
 Each phase lists the tasks it delivered and its definition of done.
 
@@ -245,19 +246,33 @@ Enabling YOLO AI tracking in the UI automatically detects and tracks subjects in
 
 ---
 
+#### 🎛️ PHASE 10: Interactive 360° Preview, Horizon Auto-Align & Out-of-the-Box AI ✅
+**Goal:** Make the 360° preview usable while the clip plays, level tilted spherical footage automatically, and remove the manual runtime/model setup that left AI tracking unavailable in the shipped image.
+
+**Delivered:**
+1. **Interactive spherical preview (`VideoWorkspace.jsx`):** the AI-view overlay is now a drag surface — horizontal drag adjusts `pan`, vertical drag adjusts `tilt`, the mouse wheel adjusts `zoom`, throttled to ~8 commits/second into `/api/ai/view-state` while playback continues. A tap (no drag) still toggles play/pause, and a head-up readout shows pan/tilt, applied level correction and the drag/scroll hint.
+2. **Horizon auto-align (`backend/services/horizon_service.py`):** samples up to 12 frames, shears each by candidate angles from −20°…+20° and picks the angle that concentrates the horizon's vertical gradient into a single row. The confidence-weighted median becomes `roll` in the framing document; `POST /api/ai/auto-align` applies it (and stores `horizon_alignment` with confidence/samples).
+3. **Render integration:** `options.roll` adds a size-preserving `rotate=…:ow=iw:oh=ih` filter before the crop/AI-tracking stages, so the rendered file matches the levelled preview.
+4. **Settings (`Automation → 360° Horizon`):** auto-align toggle (on by default), `Detect horizon`, `Reset level`, live roll/confidence readout. Selecting a spherical source auto-aligns it when the toggle is on; switching it off clears the roll.
+5. **AI runtime ships by default:** `INSTALL_AI_TRACKING=1` is now the Dockerfile default (numpy + onnxruntime 1.31.1), and `yolo_tracking_service` downloads the YOLO11n ONNX weights once into `AI_TRACKING_MODEL_DIR` (`/models`, bind-mounted from `./models`) when `AI_TRACKING_MODEL` is empty. `docker-compose.ai.yml` remains only to pin a specific model file.
+
+**Definition of Done:**
+A fresh `docker compose up --build` reports `onnxruntime` as the tracker backend, the 360° preview can be steered during playback, and a tilted spherical clip is levelled in both preview and render without any manual model export.
+
+---
+
 ### 5. Remaining Work
 
-**None.** Phases 1–9 cover the product scope in this roadmap and are all shipped.
-The items previously listed as open were documentation drift only; they are now
-resolved:
+**None.** Phases 1–10 cover the product scope in this roadmap and are all shipped.
 
 - Phase 7's heading no longer carries an in-progress marker; all Phase 7 tasks
   (multi-stage slim image, zero-config host mounts, Quick drives bar, network /
   SMB / URL sources) are implemented and verified.
-- The top-level status and phase count reflect the nine shipped phases.
+- The top-level status and phase count reflect the ten shipped phases.
 - The target structure below matches the files that actually exist — the neutral
   360° framing viewport is implemented inside `VideoWorkspace.jsx` with its
-  controls in `AiViewPanel.jsx`, so no separate `AIViewSelector.jsx` file exists.
+  controls in `AiViewPanel.jsx` and the horizon card in `ControlPanel.jsx`, so no
+  separate `AIViewSelector.jsx` file exists.
 
 Future enhancements should be added as new numbered phases rather than reopening
 completed ones.
@@ -270,16 +285,16 @@ completed ones.
 fast-frame/
 ├── docker-compose.yml          # GPU passthrough + automatic host drive mounts (/run/desktop/mnt/host & C:/)
 ├── docker-compose.cpu.yml      # CPU-only override (gpus: []) for machines without NVIDIA toolkit
-├── docker-compose.ai.yml       # Optional YOLO runtime overlay (numpy + onnxruntime, mounts ./models)
+├── docker-compose.ai.yml       # Optional overlay pinning a specific ONNX model file
 ├── Dockerfile                  # Multi-stage slim image (Node 20 builder -> Python 3.11 slim + FFmpeg + NVENC env)
 ├── README.md
 ├── ROADMAP.md
 ├── DECISIONS.md
 ├── SUMMARY.md
-├── models/                     # Exported yolov8n.onnx for the optional ONNX tracker
+├── models/                     # Auto-downloaded YOLO11n ONNX weights (or your own)
 ├── backend/
 │   ├── requirements.txt
-│   ├── requirements-ai.txt     # Optional numpy/onnxruntime for YOLO tracking
+│   ├── requirements-ai.txt     # numpy/onnxruntime for YOLO tracking (installed by default)
 │   ├── main.py                 # FastAPI app, WebSocket & static frontend serving
 │   ├── config.py               # Mount paths (/mnt/host), symlink-safe validation, drive shortcuts, network helpers
 │   ├── models.py               # Pydantic job & options schemas
@@ -294,7 +309,8 @@ fast-frame/
 │   │   ├── gpu_service.py      # nvidia-smi & NVENC encoder detection with CPU fallback
 │   │   ├── insp_service.py     # Insta360 .insp demuxer & equirectangular/rectilinear preview metadata
 │   │   ├── ai_view_service.py  # AI framing state manager + /api/ai REST bridge
-│   │   ├── yolo_tracking_service.py # YOLOv8n detection, 3 strength levels, keyframe generation
+│   │   ├── horizon_service.py  # 360° horizon roll estimation & levelling
+│   │   ├── yolo_tracking_service.py # YOLO detection, 3 strength levels, keyframe generation
 │   │   ├── network_service.py  # SMB/CIFS & smbprotocol zero-copy handler
 │   │   └── worker.py           # Async background FFmpeg runner & progress parser
 │   └── tests/                  # Command builder, queue helper, network, host-mount, .insp, AI view & tracking tests

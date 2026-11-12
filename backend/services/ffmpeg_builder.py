@@ -64,6 +64,8 @@ class RenderOptions:
     rotation: str = "none"
     flip_horizontal: bool = False
     crop: dict[str, float] | None = None
+    # Level correction (degrees) for spherical sources, positive = clockwise.
+    roll: float = 0.0
     # YOLO auto-framing: {"enabled", "level", "mode", "keyframes"}.
     ai_tracking: dict[str, Any] | None = None
 
@@ -243,11 +245,19 @@ def oriented_dimensions(width: int, height: int, rotation: str) -> tuple[int, in
 
 
 def build_transform_filters(options: RenderOptions) -> list[str]:
+    """Rotation/flip/roll filters; the roll keeps spherical horizons level."""
+
     if options.rotation not in ROTATION_FILTERS:
         raise FFmpegBuildError(f"Unsupported rotation: {options.rotation}")
     filters = list(ROTATION_FILTERS[options.rotation])
     if options.flip_horizontal:
         filters.append("hflip")
+    roll = float(options.roll or 0.0)
+    if abs(roll) > 1e-3:
+        # ``ow=iw:oh=ih`` keeps the frame size (and every later crop
+        # coordinate) unchanged; the corners are filled black.
+        radians = f"({_format_number(roll, 3)}*PI/180)"
+        filters.append(f"rotate={radians}:ow=iw:oh=ih:fillcolor=black")
     return filters
 
 

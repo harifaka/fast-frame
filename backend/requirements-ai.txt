@@ -1,9 +1,9 @@
-# Optional runtime for YOLO auto-framing (Phase 9).
+# Runtime for YOLO auto-framing (Phase 9).
 #
-# Installed only when the image is built with
-#   --build-arg INSTALL_AI_TRACKING=1
-# (docker-compose.ai.yml does that) so the default image stays slim. Together
-# these two wheels add roughly 50 MB; the model itself is ~12 MB and is mounted
-# from ./models instead of being baked in.
+# Installed by default by the Dockerfile (ARG INSTALL_AI_TRACKING=1). Build with
+# --build-arg INSTALL_AI_TRACKING=0 for the slim image without AI tracking.
+# Together these two wheels add roughly 80 MB. The ONNX weights (~11 MB) are
+# downloaded once on first detection into AI_TRACKING_MODEL_DIR (/models) or a
+# temp cache — bind-mount ./models to keep them across restarts.
 numpy==2.2.1
-onnxruntime==1.20.1
+onnxruntime==1.31.1

@@ -109,6 +109,11 @@ export const api = {
   }),
   aiTrackingFrame: (path, time = 0, level) =>
     request(`/api/ai/tracking/frame${buildQuery({ path, time, level })}`),
+  autoAlignHorizon: (payload) => request('/api/ai/auto-align', {
+    method: 'POST',
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload ?? {}),
+  }),
 }
 
 export function openProgressSocket(onEvent, onStatusChange) {

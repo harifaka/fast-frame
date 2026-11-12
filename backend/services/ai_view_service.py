@@ -43,7 +43,7 @@ MAX_KEYFRAMES = 500
 
 #: Fields where ``None`` is a meaningful value ("clear this"), so a partial
 #: update must not silently drop it the way other ``None`` values are dropped.
-_NULLABLE_FIELDS = frozenset({"tracking_analysis"})
+_NULLABLE_FIELDS = frozenset({"tracking_analysis", "horizon_alignment"})
 
 MCP_ACTIONS: tuple[str, ...] = (
     "set_view",
@@ -96,6 +96,7 @@ def default_state() -> dict[str, Any]:
         "ai_tracking_level": DEFAULT_LEVEL,
         "tracking_keyframes": [],
         "tracking_analysis": None,
+        "horizon_alignment": None,
         "revision": 0,
         "updated_at": None,
     }
@@ -222,6 +223,14 @@ def apply_patch(state: dict[str, Any], patch: Mapping[str, Any]) -> dict[str, An
             json.loads(json.dumps(dict(analysis))) if analysis is not None else None
         )
 
+    if "horizon_alignment" in patch:
+        alignment = patch["horizon_alignment"]
+        if alignment is not None and not isinstance(alignment, Mapping):
+            raise AiViewError("horizon_alignment must be an object or null")
+        next_state["horizon_alignment"] = (
+            json.loads(json.dumps(dict(alignment))) if alignment is not None else None
+        )
+
     if "keyframe_offsets" in patch and patch["keyframe_offsets"] is not None:
         frames = patch["keyframe_offsets"]
         if not isinstance(frames, (list, tuple)):
@@ -261,6 +270,7 @@ class AiViewStateManager:
             "tracking": "/api/ai/tracking",
             "tracking_analyze": "/api/ai/tracking/analyze",
             "tracking_frame": "/api/ai/tracking/frame",
+            "auto_align": "/api/ai/auto-align",
         }
         return state
 

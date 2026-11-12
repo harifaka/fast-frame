@@ -7,11 +7,13 @@ import {
   Film,
   FolderOpen,
   Gauge,
+  Globe,
   HardDrive,
   Info,
   Plus,
   RefreshCw,
   Rocket,
+  RotateCcw,
   Save,
   Settings2,
   Sparkles,
@@ -69,9 +71,9 @@ const GROUPS = [
     label: 'Automation',
     icon: Sparkles,
     tone: 'text-indigo-400',
-    summary: 'Presets · AI View',
-    tooltip: 'Saved presets and the AI view selector for reframing and object tracking',
-    sections: ['presets', 'aiview'],
+    summary: 'Presets · AI View · Horizon',
+    tooltip: 'Saved presets, AI view selector and 360° horizon levelling',
+    sections: ['presets', 'aiview', 'spherical'],
   },
 ]
 
@@ -190,6 +192,9 @@ export default function ControlPanel({
   aiTrackingError = null,
   aiViewEndpoint = '/api/ai/view-state',
   currentTime = 0,
+  onAutoAlign,
+  autoAligning = false,
+  autoAlignError = null,
 }) {
   const speed = Number(settings.speed) || 1
   const encoderName =
@@ -821,6 +826,111 @@ export default function ControlPanel({
               currentTime={currentTime}
               endpointHint={aiViewEndpoint}
             />
+          </ConfigSection>
+
+          <ConfigSection
+            id="spherical"
+            title="360° Horizon"
+            icon={Globe}
+            tone="text-fuchsia-400"
+            hidden={activeGroup !== 'automation'}
+            open={openSections.spherical}
+            onToggle={() => toggleSection('spherical')}
+            sectionRef={(node) => {
+              sectionRefs.current.spherical = node
+            }}
+            badge={
+              <span
+                className={`chip ${
+                  metadata?.spherical
+                    ? 'border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-300'
+                    : 'border-white/10 bg-white/[0.03] text-slate-500'
+                }`}
+              >
+                {metadata?.spherical
+                  ? `${Number(aiView?.roll || 0).toFixed(1)}° level`
+                  : '360° only'}
+              </span>
+            }
+          >
+            <div className="space-y-3 p-4">
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <span className="field-label !mb-0">Auto-align horizon</span>
+                  <p className="mt-0.5 text-[10px] leading-relaxed text-slate-500">
+                    Levels tilted 360° footage in the preview and in the render.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={Boolean(settings.autoAlignHorizon)}
+                  aria-label="Toggle 360 horizon auto-align"
+                  onClick={() => onChange({ autoAlignHorizon: !settings.autoAlignHorizon })}
+                  data-active={Boolean(settings.autoAlignHorizon)}
+                  className="relative h-5 w-9 shrink-0 rounded-full border border-white/10 bg-white/10 transition data-[active=true]:border-accent-500/50 data-[active=true]:bg-accent-500/40"
+                >
+                  <span
+                    className={`absolute top-0.5 h-3.5 w-3.5 rounded-full transition-all ${
+                      settings.autoAlignHorizon ? 'left-[18px] bg-white' : 'left-0.5 bg-slate-300'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  className="btn-ghost !px-2 !py-1 !text-[11px]"
+                  disabled={!metadata?.spherical || autoAligning}
+                  onClick={() => onAutoAlign?.()}
+                  title="Sample the clip and level the horizon"
+                >
+                  {autoAligning ? (
+                    <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Globe className="h-3.5 w-3.5" />
+                  )}
+                  {autoAligning ? 'Measuring…' : 'Detect horizon'}
+                </button>
+                <button
+                  type="button"
+                  className="btn-ghost !px-2 !py-1 !text-[11px]"
+                  disabled={!metadata?.spherical || Number(aiView?.roll || 0) === 0}
+                  onClick={() => onAiViewChange?.({ roll: 0 })}
+                  title="Remove the level correction"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  Reset level
+                </button>
+                <span className="font-mono text-[10px] text-slate-500">
+                  {Number(aiView?.roll || 0).toFixed(1)}° · confidence{' '}
+                  {Math.round(Number(aiView?.horizon_alignment?.confidence || 0) * 100)}%
+                </span>
+              </div>
+
+              {!metadata?.spherical && (
+                <p className="text-[10px] leading-relaxed text-slate-600">
+                  Horizon levelling only applies to 360° sources (.insp / .insv).
+                </p>
+              )}
+              {metadata?.spherical && !settings.autoAlignHorizon && (
+                <p className="text-[10px] leading-relaxed text-slate-600">
+                  Auto-align is off — the current {Number(aiView?.roll || 0).toFixed(1)}° correction
+                  still applies until you reset it.
+                </p>
+              )}
+              {autoAlignError && (
+                <p className="rounded-md border border-red-500/25 bg-red-500/10 px-2 py-1 text-[10px] text-red-200">
+                  {autoAlignError}
+                </p>
+              )}
+              <p className="flex items-start gap-1.5 text-[10px] leading-relaxed text-slate-600">
+                <Info className="mt-0.5 h-3 w-3 shrink-0" />
+                In the preview drag the frame to look around and scroll to zoom — the same
+                pan/tilt/zoom the AI tracker and MCP agents steer.
+              </p>
+            </div>
           </ConfigSection>
 
           <ConfigSection

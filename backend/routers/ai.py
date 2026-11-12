@@ -16,6 +16,7 @@ from fastapi.concurrency import run_in_threadpool
 
 import config
 from models import (
+    AiAutoAlignRequest,
     AiMcpCommand,
     AiTrackingAnalyzeRequest,
     AiTrackingUpdate,
@@ -23,6 +24,7 @@ from models import (
 )
 from services.ai_view_service import AiViewError, ai_view_state
 from services.ffprobe_service import ProbeError, probe_video
+from services.horizon_service import HorizonError, detect_horizon_roll
 from services.insp_service import inspect_spherical
 from services.yolo_tracking_service import TrackingError, tracking_service
 
@@ -156,6 +158,47 @@ async def analyze_tracking(payload: AiTrackingAnalyzeRequest) -> dict[str, Any]:
     except AiViewError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"analysis": summary, "view_state": new_state}
+
+
+@router.post("/auto-align")
+async def auto_align(payload: AiAutoAlignRequest) -> dict[str, Any]:
+    """Estimate the horizon roll of a 360° source and optionally apply it."""
+
+    source = _resolve_source(payload.source_path)
+    if not payload.force and not config.is_spherical_file(Path(source)):
+        raise HTTPException(
+            status_code=422,
+            detail="Auto-align is only available for 360° spherical sources (.insp/.insv)",
+        )
+    try:
+        metadata = await _probe_source(source)
+    except ProbeError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    try:
+        alignment = await run_in_threadpool(
+            detect_horizon_roll,
+            source,
+            duration=float(metadata.get("duration") or 0.0),
+            samples=payload.samples,
+        )
+    except HorizonError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    if not payload.apply:
+        return {"alignment": alignment, "view_state": ai_view_state.snapshot()}
+    try:
+        state = ai_view_state.update(
+            {
+                "roll": alignment["applied_roll"],
+                "horizon_alignment": alignment,
+                "source_path": source,
+                "controller": "ui",
+            }
+        )
+    except AiViewError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"alignment": alignment, "view_state": state}
 
 
 @router.get("/tracking/frame")
