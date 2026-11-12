@@ -2,7 +2,18 @@
 ## GPU-Accelerated Video Speed & Processing Studio (Zero-Copy Docker WebApp)
 ## Development Roadmap & Specification
 
-**Status:** Phases 1–8 are implemented, verified and committed.
+**Status:** All nine phases (1–9) are implemented, verified and committed.
+No roadmap item is outstanding; the phase specs below are the reference for
+behaviour that must not regress.
+
+**Contents**
+
+1. [Project overview & core principles](#1-project-overview--core-principles)
+2. [Tech stack](#2-tech-stack)
+3. [Phase status at a glance](#3-phase-status-at-a-glance)
+4. [Completed phase specifications](#4-completed-phase-specifications)
+5. [Remaining work](#5-remaining-work)
+6. [Target project structure](#6-target-project-structure)
 
 ### 1. Project Overview & Core Principles
 The goal is to build a Dockerized, web-based video processing application utilizing NVIDIA RTX 3060 (NVENC) GPU acceleration.
@@ -27,7 +38,10 @@ The goal is to build a Dockerized, web-based video processing application utiliz
 
 ---
 
-### 3. The 8-Phase Iterative Development Plan (Step-by-Step)
+### 3. Phase Status at a Glance
+
+The project was built as nine sequential phases. Every phase below is complete and
+verified; the detailed specifications in section 4 are kept as the regression contract.
 
 | Phase | Scope | Status |
 | --- | --- | --- |
@@ -41,10 +55,11 @@ The goal is to build a Dockerized, web-based video processing application utiliz
 | 8 | Insta360 `.insp` support & mock AI view selector (MCP-ready) | ✅ Implemented |
 | 9 | Ultra-lightweight YOLO tracking & 360° smart framing (3 strength levels) | ✅ Implemented |
 
-Each phase lists the tasks it delivered and its definition of done; completed phases are
-kept as the reference specification for the behaviour that must not regress.
+Each phase lists the tasks it delivered and its definition of done.
 
 ---
+
+### 4. Completed Phase Specifications
 
 #### 🚀 PHASE 1: Docker Foundation, NVIDIA GPU Passthrough & Zero-Copy File Browser ✅
 **Goal:** Enable the container to access the RTX 3060 GPU and the host filesystem (`/mnt/host`), allowing the user to browse source files and target directories via the web UI and preview videos.
@@ -166,7 +181,7 @@ The studio opens with the preview spanning the full width of the window, every c
 
 ---
 
-#### 🌐 PHASE 7: Auto-Mounted Host Drives, Network/SMB Sources & Slim Multi-Stage Image 🚧
+#### 🌐 PHASE 7: Auto-Mounted Host Drives, Network/SMB Sources & Slim Multi-Stage Image ✅
 **Goal:** Automatically expose all Windows/Linux host drives (`C:`, `D:`, USB drives) without manual `.env` or compose edits, support Network URLs & SMB/NAS shares directly in the File Browser modal, and shrink the Docker image from ~3 GB to under 1 GB while keeping full NVENC GPU acceleration and automatic CPU fallback.
 
 **Tasks (Docker & Infrastructure):**
@@ -230,48 +245,77 @@ Enabling YOLO AI tracking in the UI automatically detects and tracks subjects in
 
 ---
 
-### 4. Target Project Directory Structure
+### 5. Remaining Work
+
+**None.** Phases 1–9 cover the product scope in this roadmap and are all shipped.
+The items previously listed as open were documentation drift only; they are now
+resolved:
+
+- Phase 7's heading no longer carries an in-progress marker; all Phase 7 tasks
+  (multi-stage slim image, zero-config host mounts, Quick drives bar, network /
+  SMB / URL sources) are implemented and verified.
+- The top-level status and phase count reflect the nine shipped phases.
+- The target structure below matches the files that actually exist — the neutral
+  360° framing viewport is implemented inside `VideoWorkspace.jsx` with its
+  controls in `AiViewPanel.jsx`, so no separate `AIViewSelector.jsx` file exists.
+
+Future enhancements should be added as new numbered phases rather than reopening
+completed ones.
+
+---
+
+### 6. Target Project Structure
 
 ```text
 fast-frame/
 ├── docker-compose.yml          # GPU passthrough + automatic host drive mounts (/run/desktop/mnt/host & C:/)
 ├── docker-compose.cpu.yml      # CPU-only override (gpus: []) for machines without NVIDIA toolkit
+├── docker-compose.ai.yml       # Optional YOLO runtime overlay (numpy + onnxruntime, mounts ./models)
 ├── Dockerfile                  # Multi-stage slim image (Node 20 builder -> Python 3.11 slim + FFmpeg + NVENC env)
 ├── README.md
 ├── ROADMAP.md
 ├── DECISIONS.md
 ├── SUMMARY.md
+├── models/                     # Exported yolov8n.onnx for the optional ONNX tracker
 ├── backend/
 │   ├── requirements.txt
+│   ├── requirements-ai.txt     # Optional numpy/onnxruntime for YOLO tracking
 │   ├── main.py                 # FastAPI app, WebSocket & static frontend serving
 │   ├── config.py               # Mount paths (/mnt/host), symlink-safe validation, drive shortcuts, network helpers
 │   ├── models.py               # Pydantic job & options schemas
 │   ├── routers/
 │   │   ├── filesystem.py       # Drive listing, metadata, HTTP 206 stream & quick drive endpoints
 │   │   ├── network.py          # SMB/NAS mount & stream relay endpoints
-│   │   └── queue.py            # Render queue & job control API
+│   │   ├── queue.py            # Render queue & job control API
+│   │   └── ai.py               # AI view-state, MCP command and YOLO tracking endpoints
 │   ├── services/
 │   │   ├── ffmpeg_builder.py   # Filter_complex, NVENC, atempo, multi-cut command builder
 │   │   ├── ffprobe_service.py  # Video metadata extractor (local & URL)
 │   │   ├── gpu_service.py      # nvidia-smi & NVENC encoder detection with CPU fallback
 │   │   ├── insp_service.py     # Insta360 .insp demuxer & equirectangular/rectilinear preview metadata
-│   │   ├── ai_view_service.py  # AI framing state manager + /api/ai REST & WebSocket (MCP bridge)
+│   │   ├── ai_view_service.py  # AI framing state manager + /api/ai REST bridge
+│   │   ├── yolo_tracking_service.py # YOLOv8n detection, 3 strength levels, keyframe generation
 │   │   ├── network_service.py  # SMB/CIFS & smbprotocol zero-copy handler
 │   │   └── worker.py           # Async background FFmpeg runner & progress parser
-│   └── tests/                  # Command builder, queue helper, network & host-mount tests
+│   └── tests/                  # Command builder, queue helper, network, host-mount, .insp, AI view & tracking tests
 └── frontend/
     ├── package.json
     ├── vite.config.js
     ├── index.html
     └── src/
         ├── App.jsx
+        ├── api.js
+        ├── utils.js
         └── components/
+            ├── AiViewPanel.jsx     # AI view selector, YOLO toggle, strength levels, analysis
             ├── CommandBar.jsx      # Configuration toggle, summary pills, destination, Render Now / + Add to Queue
+            ├── ControlPanel.jsx    # Slide-over Configuration drawer (Presets, Source, Speed, Encoding, AI View, Subtitles)
             ├── FileBrowser.jsx     # Host Drives (with Quick Drive bar) + Network/SMB/URL modal
             ├── FileEntryList.jsx   # Shared entry list for the Host Drives and Network tabs
+            ├── Header.jsx          # GPU status bar and studio title
+            ├── JobProgress.jsx     # Live render progress card
             ├── NetworkPanel.jsx    # Direct URL & Windows/NAS SMB share connection UI
-            ├── VideoWorkspace.jsx  # Video player preview, Crop overlay, Multi-Cut timeline, AI view selector overlay
-            ├── AIViewSelector.jsx  # Toggleable neutral framing viewport (pan/tilt/zoom) for .insp / 360° sources
-            ├── ControlPanel.jsx    # Slide-over Configuration drawer (Presets, Source, Speed, Encoding, Subtitles)
-            └── RenderQueue.jsx     # Live progress bar & Batch queue drawer
+            ├── RenderQueue.jsx     # Live progress bar & Batch queue drawer
+            ├── Timeline.jsx        # Multi-cut segment editor
+            └── VideoWorkspace.jsx  # Preview player, neutral 360° view, YOLO box overlay, rotate/crop toolbar
 ```

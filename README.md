@@ -6,6 +6,10 @@ Fast-Frame never uploads your media. Host drives are bind-mounted into the conta
 reads the source file and writes the result directly on the host filesystem. You get NVENC
 (H.264/HEVC) rendering at 10–50× realtime without moving a single byte through the browser.
 
+All nine roadmap phases are implemented and verified. The full specification and phase
+history live in [`ROADMAP.md`](ROADMAP.md); architectural trade-offs are in
+[`DECISIONS.md`](DECISIONS.md).
+
 | Feature | What it does |
 | --- | --- |
 | **Speed engine** | 0.25× – 4.0× with pitch-corrected audio (chained `atempo`), never chipmunk audio |
@@ -18,6 +22,8 @@ reads the source file and writes the result directly on the host filesystem. You
 | **Presets** | Save speed/codec/subtitle-size combos in LocalStorage |
 | **Auto host drives** | Every Windows drive + USB all at once via `/mnt/host/drives`, one-click Quick drives bar, no `.env` |
 | **Network / NAS / URL** | HTTP(S), RTSP, RTMP and WebDAV streams plus SMB/NAS shares as source *or* destination |
+| **Insta360 `.insp` / `.insv`** | Recognised automatically, spherical metadata, neutral 360° preview with an AI framing viewport |
+| **YOLO auto-framing** | Optional ultralight YOLOv8n subject tracking with Smooth / Dynamic / Aggressive levels, rendered as a time-varying crop |
 
 ---
 
@@ -475,6 +481,7 @@ Example job:
     "rotation": "90_cw",
     "flip_horizontal": false,
     "crop": { "x": 0.1, "y": 0.1, "w": 0.8, "h": 0.8 },
+    "ai_tracking": { "enabled": true, "level": 2, "mode": "subject" },
     "prefer_gpu": true
   }
 }
