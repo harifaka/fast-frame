@@ -1,0 +1,98 @@
+name: Cleanup container images
+
+# Keeps GHCR at roughly one build's worth of images. Every `Release` run pushes
+# three new versions (lite / standard / pro), so a new generation replaces the
+# previous one instead of accumulating. Untagged manifests left behind by
+# cancelled or failed pushes are swept separately (see `concurrency` in
+# release.yml, which can cancel a run mid-push).
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+  # Safety net: dangling manifests from cancelled runs and manual pushes.
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      keep-versions:
+        description: "Tagged versions to keep (3 = one per edition: lite/standard/pro)"
+        type: string
+        default: "3"
+
+# Never let two prunes run at the same time: the action paginates the version
+# list and deletes by id, so a concurrent run could delete a freshly kept one.
+concurrency:
+  group: cleanup-container-images
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  # packages:write is what grants delete-package-versions the read+delete
+  # scopes it needs on the package owned by this repository.
+  packages: write
+
+env:
+  # Same repository name as IMAGE_NAME in release.yml; GHCR lowercases it and
+  # drops the owner, so `ghcr.io/<owner>/fast-frame` becomes package `fast-frame`.
+  PACKAGE_NAME: fast-frame
+
+jobs:
+  prune:
+    name: Prune old GHCR versions
+    runs-on: ubuntu-latest
+    # A cancelled or failed Release may not have pushed all three editions.
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    steps:
+      - name: Resolve retention settings
+        id: settings
+        env:
+          KEEP_INPUT: ${{ inputs.keep-versions || '3' }}
+        run: |
+          KEEP="${KEEP_INPUT:-3}"
+          if ! [[ "$KEEP" =~ ^[0-9]+$ ]]; then
+            echo "::error::keep-versions must be a non-negative integer, got '$KEEP'"
+            exit 1
+          fi
+          # All three editions live in the same package, so keeping fewer than
+          # three versions would leave the `lite`/`pro` aliases pointing at a
+          # deleted manifest and break `docker pull`.
+          if [ "$KEEP" -lt 3 ]; then
+            echo "::warning::keep-versions=$KEEP is below 3; keeping 3 so every edition alias stays resolvable."
+            KEEP=3
+          fi
+          echo "keep=$KEEP" >> "$GITHUB_OUTPUT"
+          echo "Keeping the $KEEP newest package versions."
+
+      - name: Show current versions
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api "/users/${{ github.repository_owner }}/packages/container/${PACKAGE_NAME}/versions?per_page=20" \
+            --jq '.[] | "\(.id)\t\(.created_at)\t\((.metadata.container.tags // []) | if length == 0 then "(untagged)" else join(",") end)"'
+
+      # Must run before the retention step: untagged versions would otherwise
+      # occupy slots in the "newest N" window and evict tagged builds.
+      - name: Delete untagged versions
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: ${{ env.PACKAGE_NAME }}
+          package-type: container
+          delete-only-untagged-versions: true
+          min-versions-to-keep: 0
+
+      - name: Keep only the newest ${{ steps.settings.outputs.keep }} versions
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: ${{ env.PACKAGE_NAME }}
+          package-type: container
+          min-versions-to-keep: ${{ steps.settings.outputs.keep }}
+
+      - name: Show remaining versions
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api "/users/${{ github.repository_owner }}/packages/container/${PACKAGE_NAME}/versions?per_page=20" \
+            --jq '.[] | "\(.id)\t\(.created_at)\t\((.metadata.container.tags // []) | if length == 0 then "(untagged)" else join(",") end)"'
