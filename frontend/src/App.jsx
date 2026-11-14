@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CircleAlert, X } from 'lucide-react'
 import { api, openProgressSocket } from './api'
 import { dirname, formatBytes, isNetworkUrl, suggestOutputName } from './utils'
@@ -9,6 +9,9 @@ import ControlPanel from './components/ControlPanel'
 import CommandBar from './components/CommandBar'
 import Timeline from './components/Timeline'
 import RenderQueue from './components/RenderQueue'
+
+// Three.js is heavy: only pull the WebGL viewer into the bundle on demand.
+const PointCloudViewer = lazy(() => import('./components/PointCloudViewer'))
 
 const DEFAULT_SETTINGS = {
   speed: 1,
@@ -70,6 +73,7 @@ export default function App() {
   const [aiAutoAlignError, setAiAutoAlignError] = useState(null)
   const [pointCloud, setPointCloud] = useState(null)
   const [pointCloudError, setPointCloudError] = useState(null)
+  const [pointCloudView, setPointCloudView] = useState(null)
   const settingsRef = useRef(settings)
 
   useEffect(() => {
@@ -83,6 +87,12 @@ export default function App() {
   }, [])
 
   const closeConfig = useCallback(() => setConfigOpen(false), [])
+
+  const openPointCloudViewer = useCallback((path) => {
+    if (path) setPointCloudView(path)
+  }, [])
+
+  const closePointCloudViewer = useCallback(() => setPointCloudView(null), [])
 
   const updateSettings = useCallback(
     (patch) => {
@@ -682,6 +692,8 @@ export default function App() {
         }}
         videoExtensions={appConfig?.video_extensions || ['.mp4', '.mkv', '.avi']}
         subtitleExtensions={appConfig?.subtitle_extensions || ['.srt']}
+        onViewPointCloud={openPointCloudViewer}
+        suppressEscape={Boolean(pointCloudView)}
       />
 
       <RenderQueue
@@ -735,7 +747,21 @@ export default function App() {
         pointCloudOutput={defaultPointCloudOutput}
         onPointCloudGenerate={generatePointCloud}
         onPointCloudRefresh={refreshPointCloud}
+        onViewPointCloud={openPointCloudViewer}
+        suppressEscape={Boolean(pointCloudView)}
       />
+
+      {pointCloudView ? (
+        <Suspense
+          fallback={
+            <div className="fixed inset-0 z-[60] grid place-items-center bg-black/95 text-xs text-slate-400">
+              Loading 3D engine…
+            </div>
+          }
+        >
+          <PointCloudViewer open path={pointCloudView} onClose={closePointCloudViewer} />
+        </Suspense>
+      ) : null}
     </div>
   )
 }

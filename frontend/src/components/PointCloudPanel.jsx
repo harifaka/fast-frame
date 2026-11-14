@@ -29,6 +29,7 @@ export default function PointCloudPanel({
   disabled = false,
   onGenerate,
   onRefresh,
+  onView3D,
 }) {
   const [sampleRate, setSampleRate] = useState(1)
   const [outputPath, setOutputPath] = useState(defaultOutputPath || '')
@@ -189,11 +190,23 @@ export default function PointCloudPanel({
 
       {status?.state === 'completed' && status.output ? (
         <div className="rounded-md border border-emerald-500/25 bg-emerald-500/10 px-2 py-1.5 text-[10px] leading-relaxed text-emerald-200">
-          <div className="truncate font-mono">{status.output}</div>
-          <div className="text-emerald-300/80">
-            {Number(status.points || 0).toLocaleString()} points ·{' '}
-            {formatBytes(Number(status.output_size_bytes) || 0)} ·{' '}
-            {status.frames_processed}/{status.frames_total} frames
+          <div className="flex items-center gap-2">
+            <div className="min-w-0 flex-1">
+              <div className="truncate font-mono">{status.output}</div>
+              <div className="text-emerald-300/80">
+                {Number(status.points || 0).toLocaleString()} points ·{' '}
+                {formatBytes(Number(status.output_size_bytes) || 0)} ·{' '}
+                {status.frames_processed}/{status.frames_total} frames
+              </div>
+            </div>
+            <button
+              type="button"
+              className="btn-primary shrink-0 !px-2 !py-1 !text-[11px]"
+              onClick={() => onView3D?.(status.output)}
+              title="Open the fly-through viewer"
+            >
+              🎮 View 3D
+            </button>
           </div>
         </div>
       ) : null}
@@ -218,7 +231,8 @@ export default function PointCloudPanel({
 
       <p className="text-[10px] leading-relaxed text-slate-600">
         <span className="font-mono text-slate-500">POST</span> /api/ai/point-cloud/generate ·{' '}
-        <span className="font-mono text-slate-500">GET</span> /api/ai/point-cloud/status
+        <span className="font-mono text-slate-500">GET</span> /api/ai/point-cloud/status ·{' '}
+        <span className="font-mono text-slate-500">GET</span> /api/fs/file
       </p>
     </div>
   )

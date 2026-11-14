@@ -1,7 +1,11 @@
-import { Captions, Check, FileVideo, Folder } from 'lucide-react'
-import { formatBytes, formatModifiedDate } from '../utils'
+import { Box, Captions, Check, FileVideo, Folder } from 'lucide-react'
+import { formatBytes, formatModifiedDate, isPointCloudPath } from '../utils'
 
 const VIDEO_KINDS = new Set(['video'])
+
+function isPointCloudEntry(entry) {
+  return !entry.is_dir && (entry.kind === 'point_cloud' || isPointCloudPath(entry.path))
+}
 
 /**
  * Sorted, clickable media list shared by the host-drive tab and the
@@ -19,11 +23,16 @@ export default function FileEntryList({
 }) {
   const directories = entries.filter((entry) => entry.is_dir)
   const playable = entries.filter((entry) => VIDEO_KINDS.has(entry.kind))
+  const pointClouds = entries.filter(isPointCloudEntry)
   const subtitles = entries.filter((entry) => entry.kind === 'subtitle')
   const otherFiles = entries.filter(
-    (entry) => !entry.is_dir && !VIDEO_KINDS.has(entry.kind) && entry.kind !== 'subtitle',
+    (entry) =>
+      !entry.is_dir &&
+      !VIDEO_KINDS.has(entry.kind) &&
+      entry.kind !== 'subtitle' &&
+      !isPointCloudEntry(entry),
   )
-  const ordered = [...directories, ...playable, ...subtitles, ...otherFiles]
+  const ordered = [...directories, ...playable, ...pointClouds, ...subtitles, ...otherFiles]
 
   if (ordered.length === 0) {
     return (
@@ -41,8 +50,9 @@ export default function FileEntryList({
     <>
       {ordered.map((entry) => {
         const isSelected = selectedPath === entry.path
-        const disabled = !entry.is_dir && !isSource
         const isVideo = entry.kind === 'video'
+        const pointCloudEntry = isPointCloudEntry(entry)
+        const disabled = !entry.is_dir && !isSource && !pointCloudEntry
         return (
           <button
             key={entry.path}
@@ -51,7 +61,7 @@ export default function FileEntryList({
             onClick={() => onPick?.(entry)}
             onDoubleClick={() => {
               if (entry.is_dir) onOpen?.(entry)
-              else if (isVideo && isSource) onOpen?.(entry)
+              else if ((isVideo && isSource) || pointCloudEntry) onOpen?.(entry)
             }}
             className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition ${
               isSelected
@@ -65,13 +75,17 @@ export default function FileEntryList({
                   ? 'bg-amber-400/10 text-amber-300'
                   : isVideo
                     ? 'bg-accent-500/10 text-accent-400'
-                    : 'bg-white/5 text-slate-400'
+                    : pointCloudEntry
+                      ? 'bg-cyan-500/10 text-cyan-300'
+                      : 'bg-white/5 text-slate-400'
               }`}
             >
               {entry.is_dir ? (
                 <Folder className="h-4 w-4" />
               ) : isVideo ? (
                 <FileVideo className="h-4 w-4" />
+              ) : pointCloudEntry ? (
+                <Box className="h-4 w-4" />
               ) : (
                 <Captions className="h-4 w-4" />
               )}
@@ -87,6 +101,11 @@ export default function FileEntryList({
               </span>
             </span>
 
+            {pointCloudEntry ? (
+              <span className="hidden shrink-0 rounded-md border border-cyan-500/30 bg-cyan-500/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-cyan-300 sm:inline">
+                3D · view
+              </span>
+            ) : null}
             {isVideo && isSource && videoExtensions?.length ? (
               <span className="hidden shrink-0 rounded-md border border-white/5 bg-white/[0.03] px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-slate-500 sm:inline">
                 {videoExtensions.join(' ')}

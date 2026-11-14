@@ -353,3 +353,38 @@ This file records every non-obvious architectural decision made while implementi
     responsive, and the UI needs only `GET /status` every 2.5 s (no second WebSocket). A second
     `generate` call is rejected with HTTP 409 while one job is running; the source and destination
     are validated against the host mount first.
+
+---
+
+## Phase 12 — In-browser point cloud viewer
+
+73. **`@react-three/fiber` v8, not v9.** Fiber 9 requires React 19 and drei 10; the studio is React
+    18 with a small, stable dependency set. Fiber 8.18 + drei 9.122 + three 0.170 is the supported
+    React 18 combination, so the 3D viewer did not drag a React major upgrade (and a re-test of every
+    other panel) into an otherwise self-contained feature.
+74. **The viewer is lazy-loaded.** three.js adds ~845 kB minified; importing it from `App.jsx`
+    would have quadrupled the initial bundle for a modal most sessions never open. `React.lazy` +
+    `Suspense` puts it in its own chunk that loads on first use, keeping the studio at ~300 kB.
+75. **`GET /api/fs/file` uses an extension allow-list.** A generic "read any file under the mount"
+    endpoint would expose every unrelated host document to the browser API. The endpoint resolves
+    paths exactly like the streamer (`resolve_host_path`, symlink/mount containment) and then only
+    serves `.ply`, video containers and `.srt` — everything else is a 400. `.ply` is explicitly served
+    as `application/octet-stream` because no IANA type is registered for it and content sniffing made
+    some browsers hand PLYLoader a text/binary mismatch.
+76. **FlyControls instead of PointerLockControls.** three's FlyControls gives keyboard flight plus
+    pointer-move looking without a pointer-lock request, so no click-to-capture step, no permission
+    prompt, and `Esc` stays available as the documented close key (pointer lock consumes `Esc` to
+    release the cursor, which would have made "ESC to close" unreliable).
+77. **Camera, speed and point size are derived from the bounding box.** Generated clouds have no
+    metric scale (Phase 11 documents the pseudo-metric stretch), so a hard-coded `position=[0,0,5]`
+    and `size=0.02` would show either a speck or a wall of pixels. The viewer centres the cloud by
+    offsetting the `points` object, frames the camera at 2.4× the radius, sets near/far from the
+    radius, and scales movement speed and the default point size (`0.02` at radius 5) to match; the
+    HUD sliders then adjust both by a factor.
+78. **The geometry is never mutated.** `useLoader` caches parsed geometry per URL, so calling
+    `geometry.center()` on load would re-translate the cloud on every remount. Offsetting the
+    `points` object position keeps the cached buffer untouched and makes reopening a file cheap.
+79. **Viewing a `.ply` does not hijack source selection.** In the browser's source mode the primary
+    action becomes **🎮 View 3D** for a `.ply` selection, but `onSelect` is not called, so the
+    current video source survives; `Esc` is ignored by the file browser and the configuration drawer
+    while the overlay is open so closing the viewer does not also close the modal behind it.

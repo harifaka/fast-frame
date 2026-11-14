@@ -202,6 +202,8 @@ export default function ControlPanel({
   pointCloudOutput = '',
   onPointCloudGenerate,
   onPointCloudRefresh,
+  onViewPointCloud,
+  suppressEscape = false,
 }) {
   const speed = Number(settings.speed) || 1
   const encoderName =
@@ -252,13 +254,13 @@ export default function ControlPanel({
   }, [pendingScroll])
 
   useEffect(() => {
-    if (!open) return undefined
+    if (!open || suppressEscape) return undefined
     const onKeyDown = (event) => {
       if (event.key === 'Escape') onClose?.()
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [open, onClose])
+  }, [open, onClose, suppressEscape])
 
   useEffect(() => {
     if (!open) return undefined
@@ -879,6 +881,7 @@ export default function ControlPanel({
               disabled={!sourcePath || !targetDir || pointCloud?.running}
               onGenerate={onPointCloudGenerate}
               onRefresh={onPointCloudRefresh}
+              onView3D={onViewPointCloud}
             />
           </ConfigSection>
 

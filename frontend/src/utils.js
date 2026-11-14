@@ -88,6 +88,11 @@ export function uid(prefix = 'id') {
 
 const NETWORK_URL_PATTERN = /^(?:https?|rtsp|rtsps|rtmp|rtmps|webdavs?|davs?):\/\//i
 
+/** True for generated point clouds that the WebGL viewer can open. */
+export function isPointCloudPath(value) {
+  return typeof value === 'string' && /\.ply$/i.test(value.trim())
+}
+
 /** True for direct stream URLs that the backend reads without downloading. */
 export function isNetworkUrl(value) {
   return typeof value === 'string' && NETWORK_URL_PATTERN.test(value.trim())

@@ -6,7 +6,7 @@ Fast-Frame never uploads your media. Host drives are bind-mounted into the conta
 reads the source file and writes the result directly on the host filesystem. You get NVENC
 (H.264/HEVC) rendering at 10–50× realtime without moving a single byte through the browser.
 
-All eleven roadmap phases are implemented and verified. The full specification and phase
+All twelve roadmap phases are implemented and verified. The full specification and phase
 history live in [`ROADMAP.md`](ROADMAP.md); architectural trade-offs are in
 [`DECISIONS.md`](DECISIONS.md).
 
@@ -25,6 +25,7 @@ history live in [`ROADMAP.md`](ROADMAP.md); architectural trade-offs are in
 | **Insta360 `.insp` / `.insv`** | Recognised automatically, spherical metadata, neutral 360° preview you can drag/scroll while it plays, plus automatic horizon levelling |
 | **YOLO auto-framing** | Built-in YOLO11s subject tracking (Smooth / Dynamic / Aggressive) with weights auto-downloaded on first use |
 | **3D point clouds** | Monocular-depth `.ply` export (MiDaS ONNX, no PyTorch) with 0.25–5 fps sampling and live progress |
+| **3D fly-through viewer** | WebGL (`react-three-fiber`) modal with vertex colours and WASD + mouse FlyControls — no download needed |
 
 ---
 
@@ -448,6 +449,33 @@ The depth model is downloaded at startup alongside the YOLO weights into
 `AI_DEPTH_MODEL=/models/<file>.onnx`; `AI_DEPTH_MODEL_KIND=depth_anything` inverts Depth Anything
 V2 outputs (depth instead of inverse depth) so they still map to closeness correctly.
 
+### 3D fly-through viewer (Phase 12)
+
+Every finished export — and every `.ply` you click in the file browser — offers a
+**🎮 View 3D** button that opens a full-screen WebGL viewer over the studio UI. The cloud is
+fetched from `GET /api/fs/file` and parsed in the browser by `PLYLoader`, so nothing is uploaded or
+copied and the file never leaves the host mount.
+
+| Input | Action |
+| --- | --- |
+| `W` / `S` | Fly forward / backward |
+| `A` / `D` | Strafe left / right |
+| `R` / `F` | Move up / down |
+| Mouse | Look around (no click-drag needed) |
+| `Q` / `E` | Roll left / right |
+| `Shift` | Precision mode (slower movement) |
+| `ESC` | Close the viewer |
+
+The HUD also exposes **Point size** and **Speed** sliders. Because generated clouds have no fixed
+world scale, the camera distance, movement speed and default point size are all derived from the
+cloud's bounding box (a point size of `0.02` at a 5-unit radius), and the cloud is centred on the
+origin when it loads. `three`, `@react-three/fiber` and `@react-three/drei` are code-split into a
+separate chunk, so the main studio bundle stays small and only the 3D engine is downloaded when you
+open a cloud for the first time.
+
+The viewer only serves files with an allow-listed extension (`.ply`, video containers and `.srt`);
+the rest of the mounted host filesystem stays unreachable through the API.
+
 ---
 
 ## 5. Rendering pipeline
@@ -487,6 +515,7 @@ Details worth knowing:
 | GET | `/api/system/gpu-check?refresh=true` | GPU name/driver, NVENC availability, CPU fallback encoders |
 | GET | `/api/system/config` | Extensions, speed range, font sizes, codecs |
 | GET | `/api/fs/list?path=…` | Directory listing (folders + videos + `.srt`), breadcrumbs |
+| GET | `/api/fs/file?path=…` | Serve an allow-listed file inline (`.ply` clouds, videos, `.srt`) to the browser |
 | GET | `/api/fs/drives` | Quick drive bar shortcuts (`C:`, `D:`, `Users`, `Media`) |
 | GET | `/api/fs/network-mounts` | Connected SMB/NAS locations + SMB client availability |
 | POST | `/api/fs/network-mount` | Connect a share (`{ path, username?, password?, name? }`) |
@@ -671,6 +700,7 @@ fast-frame/
 │       ├── FileBrowser.jsx    # Host drives (quick drive bar) + network/SMB/URL tabs
 │       ├── NetworkPanel.jsx   # Direct URL & SMB/NAS share connector
 │       ├── PointCloudPanel.jsx # 3D point cloud export card with live progress
+│       ├── PointCloudViewer.jsx # Full-screen WebGL fly-through (three.js + FlyControls)
 │       ├── VideoWorkspace.jsx # Preview player, neutral 360° view, YOLO box overlay, rotate/crop toolbar
 │       └── RenderQueue.jsx    # Live progress & batch queue drawer
 └── backend/tests/             # command-builder, queue helper, network, host-mount, .insp, AI view & tracking tests

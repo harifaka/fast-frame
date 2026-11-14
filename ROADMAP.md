@@ -40,7 +40,7 @@ The goal is to build a Dockerized, web-based video processing application utiliz
 
 ### 3. Phase Status at a Glance
 
-The project was built as eleven sequential phases. Every phase below is complete and
+The project was built as twelve sequential phases. Every phase below is complete and
 verified; the detailed specifications in section 4 are kept as the regression contract.
 
 | Phase | Scope | Status |
@@ -56,6 +56,7 @@ verified; the detailed specifications in section 4 are kept as the regression co
 | 9 | Ultra-lightweight YOLO tracking & 360° smart framing (3 strength levels) | ✅ Implemented |
 | 10 | Interactive 360° preview, horizon auto-align & out-of-the-box AI runtime | ✅ Implemented |
 | 11 | YOLO11s upgrade & lightweight ONNX 3D point cloud export | ✅ Implemented |
+| 12 | In-browser 3D point cloud viewer & fly camera | ✅ Implemented |
 
 Each phase lists the tasks it delivered and its definition of done.
 
@@ -281,14 +282,30 @@ frames without adding PyTorch or a CUDA base image.
 
 ---
 
+#### 🎮 PHASE 12: In-Browser 3D Point Cloud Viewer & Fly Camera ✅
+**Goal:** Visualise the exported `.ply` clouds directly in the browser with a game-like
+flying camera (WASD + mouse) instead of forcing a download into MeshLab/CloudCompare.
+
+**Delivered:**
+1. **3D engine (`frontend/package.json`):** `three` 0.170, `@react-three/fiber` 8.18 and `@react-three/drei` 9.122 (the React 18-compatible majors). The viewer is `React.lazy`-loaded so three.js lives in its own 845 kB chunk and the studio bundle stays at ~300 kB.
+2. **`PointCloudViewer.jsx`:** a full-screen WebGL modal (`z-60`) over the studio. `useLoader(PLYLoader, url)` parses the cloud from the HTTP endpoint, `<points>` + `<pointsMaterial vertexColors sizeAttenuation>` renders it, and `<FlyControls movementSpeed rollSpeed dragToLook={false}>` provides WASD/mouse/Q-E/R-F flight plus Shift precision mode. The cloud is centred by offsetting the `points` object (never mutating the cached geometry), and camera distance, near/far planes, movement speed and the default point size (`0.02` at a 5-unit radius) are all derived from the bounding box because generated clouds have no fixed world scale. A HUD shows the file, point count and the *"WASD to move · Mouse to look · ESC to close"* legend, with point-size and speed sliders; `Esc` (or ✕) closes it and an error boundary reports unparsable files.
+3. **File serving (`backend/routers/filesystem.py`):** `GET /api/fs/file?path=…` returns a `FileResponse` (inline `Content-Disposition`, `no-store`, `X-File-Path`) for files inside the validated host mount. Unlike the video streamer it accepts `.ply` as well as video/subtitle extensions — and only those, via an explicit allow-list, so the rest of the mounted host filesystem never becomes readable through the API.
+4. **Listing support (`backend/config.py`, `routers/filesystem.py`):** `POINT_CLOUD_EXTENSIONS`/`is_point_cloud_file()` flag `.ply` entries with `kind: "point_cloud"`, `.ply` is served as `application/octet-stream` (browsers otherwise sniff it as text and PLYLoader fails), and `/api/system/config` exposes `point_cloud_extensions` + `file_endpoint`.
+5. **UI wiring (`PointCloudPanel.jsx`, `FileBrowser.jsx`, `FileEntryList.jsx`, `ControlPanel.jsx`, `App.jsx`):** a **🎮 View 3D** button appears in the export card once a generation completes and in the browser footer when a `.ply` is selected (replacing *Use this video*; in destination mode it is offered next to *Use this folder*). `.ply` rows get a 3D icon/badge and are clickable in both modes; double-click opens the viewer. `App.jsx` owns a single `pointCloudView` state so both entry points mount the same overlay, and the drawer/browser ignore `Esc` while it is open.
+
+**Definition of Done:**
+`npm run build` succeeds, `python -m unittest discover -s tests` passes (including new `/api/fs/file` allow-list, traversal and 404 tests), and a real `.ply` renders in the browser with working WASD/mouse flight and an `Esc` exit.
+
+---
+
 ### 5. Remaining Work
 
-**None.** Phases 1–11 cover the product scope in this roadmap and are all shipped.
+**None.** Phases 1–12 cover the product scope in this roadmap and are all shipped.
 
 - Phase 7's heading no longer carries an in-progress marker; all Phase 7 tasks
   (multi-stage slim image, zero-config host mounts, Quick drives bar, network /
   SMB / URL sources) are implemented and verified.
-- The top-level status and phase count reflect the eleven shipped phases.
+- The top-level status and phase count reflect the twelve shipped phases.
 - The target structure below matches the files that actually exist — the neutral
   360° framing viewport is implemented inside `VideoWorkspace.jsx` with its
   controls in `AiViewPanel.jsx` and the horizon card in `ControlPanel.jsx`, so no
@@ -354,6 +371,7 @@ fast-frame/
             ├── JobProgress.jsx     # Live render progress card
             ├── NetworkPanel.jsx    # Direct URL & Windows/NAS SMB share connection UI
             ├── PointCloudPanel.jsx # 3D point cloud export card, sample rate, live progress
+            ├── PointCloudViewer.jsx # Full-screen WebGL fly-through (three.js + FlyControls)
             ├── RenderQueue.jsx     # Live progress bar & Batch queue drawer
             ├── Timeline.jsx        # Multi-cut segment editor
             └── VideoWorkspace.jsx  # Preview player, neutral 360° view, YOLO box overlay, rotate/crop toolbar

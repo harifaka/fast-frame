@@ -13,6 +13,7 @@ import {
   X,
 } from 'lucide-react'
 import { api } from '../api'
+import { isPointCloudPath } from '../utils'
 import FileEntryList from './FileEntryList'
 import NetworkPanel from './NetworkPanel'
 
@@ -48,8 +49,10 @@ export default function FileBrowser({
   root,
   onClose,
   onSelect,
+  onViewPointCloud,
   videoExtensions,
   subtitleExtensions,
+  suppressEscape = false,
 }) {
   const [tab, setTab] = useState('host')
   const [currentPath, setCurrentPath] = useState(initialPath || root || '')
@@ -102,11 +105,12 @@ export default function FileBrowser({
   useEffect(() => {
     if (!open) return undefined
     const handleKey = (event) => {
-      if (event.key === 'Escape') onClose()
+      // The 3D viewer overlays this modal and owns Escape while it is open.
+      if (event.key === 'Escape' && !suppressEscape) onClose()
     }
     window.addEventListener('keydown', handleKey)
     return () => window.removeEventListener('keydown', handleKey)
-  }, [open, onClose])
+  }, [open, onClose, suppressEscape])
 
   if (!open) return null
 
@@ -132,6 +136,13 @@ export default function FileBrowser({
     : selected?.is_dir
       ? selected
       : null
+
+  const pointCloudSelection =
+    selected && !selected.is_dir && isPointCloudPath(selected.path) ? selected : null
+
+  const viewSelectedPointCloud = () => {
+    if (pointCloudSelection) onViewPointCloud?.(pointCloudSelection.path)
+  }
 
   return (
     <div
@@ -258,6 +269,7 @@ export default function FileBrowser({
                   onOpen={(entry) => {
                     if (entry.is_dir) enterDirectory(entry)
                     else if (isSource && entry.kind === 'video') onSelect(entry.path)
+                    else if (isPointCloudPath(entry.path)) onViewPointCloud?.(entry.path)
                   }}
                   videoExtensions={videoExtensions}
                   emptyLabel={loading ? 'Loading…' : 'This folder is empty.'}
@@ -273,11 +285,13 @@ export default function FileBrowser({
 
             <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/5 bg-studio-950/40 px-4 py-3">
               <div className="min-w-0 text-[11px] text-slate-600">
-                {isSource
-                  ? activeSelection
-                    ? `Selected: ${activeSelection.name}`
-                    : 'Select a video file to continue'
-                  : `Destination: ${activeSelection?.path || currentPath || '—'}`}
+                {pointCloudSelection
+                  ? `${pointCloudSelection.name} · 3D point cloud — open the fly-through viewer`
+                  : isSource
+                    ? activeSelection
+                      ? `Selected: ${activeSelection.name}`
+                      : 'Select a video file to continue'
+                    : `Destination: ${activeSelection?.path || currentPath || '—'}`}
                 {isSource && subtitleExtensions?.length ? (
                   <span className="ml-2 text-slate-700">
                     ({subtitleExtensions.join(', ')} files are detected automatically)
@@ -285,18 +299,29 @@ export default function FileBrowser({
                 ) : null}
               </div>
               <div className="flex items-center gap-2">
+                {pointCloudSelection && !isSource && onViewPointCloud ? (
+                  <button type="button" onClick={viewSelectedPointCloud} className="btn-ghost">
+                    🎮 View 3D
+                  </button>
+                ) : null}
                 <button type="button" onClick={onClose} className="btn-ghost">
                   Cancel
                 </button>
-                <button
-                  type="button"
-                  onClick={confirm}
-                  disabled={isSource ? !activeSelection : !currentPath}
-                  className="btn-primary"
-                >
-                  <Check className="h-4 w-4" />
-                  {isSource ? 'Use this video' : 'Use this folder'}
-                </button>
+                {isSource && pointCloudSelection && onViewPointCloud ? (
+                  <button type="button" onClick={viewSelectedPointCloud} className="btn-primary">
+                    🎮 View 3D
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={confirm}
+                    disabled={isSource ? !activeSelection : !currentPath}
+                    className="btn-primary"
+                  >
+                    <Check className="h-4 w-4" />
+                    {isSource ? 'Use this video' : 'Use this folder'}
+                  </button>
+                )}
               </div>
             </div>
           </>

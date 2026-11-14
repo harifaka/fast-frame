@@ -16,6 +16,8 @@ from urllib.parse import unquote, urlparse, urlunparse
 VIDEO_EXTENSIONS: tuple[str, ...] = (".mp4", ".mkv", ".avi", ".insp", ".insv")
 SUBTITLE_EXTENSIONS: tuple[str, ...] = (".srt",)
 OUTPUT_EXTENSIONS: tuple[str, ...] = (".mp4", ".mkv")
+#: Point clouds written by the monocular-depth exporter (served to the WebGL viewer).
+POINT_CLOUD_EXTENSIONS: tuple[str, ...] = (".ply",)
 
 #: Insta360 spherical containers: ``.insp`` still/short clips and ``.insv`` video.
 SPHERICAL_EXTENSIONS: tuple[str, ...] = (".insp", ".insv")
@@ -265,6 +267,12 @@ def is_subtitle_file(path: Path) -> bool:
 
 def is_output_file(path: Path) -> bool:
     return path.suffix.lower() in OUTPUT_EXTENSIONS
+
+
+def is_point_cloud_file(path: Path) -> bool:
+    """True for ``.ply`` point clouds produced by the depth exporter."""
+
+    return path.suffix.lower() in POINT_CLOUD_EXTENSIONS
 
 
 def relative_to_root(path: Path) -> str:

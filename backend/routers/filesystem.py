@@ -11,17 +11,21 @@ from pathlib import Path, PurePosixPath
 from typing import Any, AsyncIterator
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from config import (
+    POINT_CLOUD_EXTENSIONS,
     PathSecurityError,
+    SUBTITLE_EXTENSIONS,
     SUPPORTED_INPUT_LABEL,
+    VIDEO_EXTENSIONS,
     discover_drive_shortcuts,
     host_root,
     is_dir_safe,
     is_file_safe,
     is_hidden_drive_entry,
     is_network_url,
+    is_point_cloud_file,
     is_previewable_url,
     is_spherical_file,
     is_subtitle_file,
@@ -39,6 +43,12 @@ router = APIRouter(prefix="/api", tags=["filesystem"])
 
 STREAM_CHUNK_SIZE = 1024 * 1024  # 1 MiB
 MAX_DIRECTORY_ENTRIES = 5000
+#: Extensions the generic file endpoint is allowed to serve. Deliberately a
+#: short allow-list: the mount also holds unrelated host data that must never
+#: become reachable through the browser API.
+SERVABLE_FILE_EXTENSIONS: frozenset[str] = frozenset(
+    (*VIDEO_EXTENSIONS, *SUBTITLE_EXTENSIONS, *POINT_CLOUD_EXTENSIONS)
+)
 _RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$", re.IGNORECASE)
 
 
@@ -67,6 +77,8 @@ def _entry_for(path: Path) -> dict[str, Any]:
         kind = "video"
     elif is_subtitle_file(path):
         kind = "subtitle"
+    elif is_point_cloud_file(path):
+        kind = "point_cloud"
     else:
         kind = "other"
 
@@ -138,6 +150,40 @@ async def list_drives() -> dict[str, Any]:
 
     root = host_root()
     return {"root": str(root), "shortcuts": discover_drive_shortcuts()}
+
+
+@router.get("/fs/file")
+async def get_file(
+    path: str = Query(..., description="Absolute file path inside HOST_MOUNT_PATH"),
+) -> FileResponse:
+    """Serve a browser-readable artifact (``.ply`` clouds, videos, subtitles).
+
+    ``PLYLoader`` fetches the generated cloud straight from this endpoint, so
+    the response is marked uncached and inline, and carries the resolved path in
+    ``X-File-Path`` for easier debugging. Only regular files with an allowed
+    extension are served - the endpoint is not a general host-file reader.
+    """
+
+    file_path = _safe_resolve(path, must_exist=True)
+    if not is_file_safe(file_path):
+        raise HTTPException(status_code=400, detail="Path is not a file")
+    if file_path.suffix.lower() not in SERVABLE_FILE_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Unsupported file type; only "
+                + ", ".join(sorted(SERVABLE_FILE_EXTENSIONS))
+                + " can be served"
+            ),
+        )
+
+    return FileResponse(
+        file_path,
+        media_type=_media_type(file_path),
+        filename=file_path.name,
+        content_disposition_type="inline",
+        headers={"Cache-Control": "no-store", "X-File-Path": str(file_path)},
+    )
 
 
 def _breadcrumbs(directory: Path, root: Path) -> list[dict[str, str]]:
@@ -272,6 +318,10 @@ def _media_type(path: Path) -> str:
         return "image/jpeg"
     if suffix == ".insv":
         return "video/mp4"
+    if suffix == ".ply":
+        # No IANA type is registered for PLY; anything other than octet-stream
+        # makes browsers guess (some sniff it as text) and breaks PLYLoader.
+        return "application/octet-stream"
     guessed, _ = mimetypes.guess_type(path.name)
     if guessed:
         if suffix == ".mkv":

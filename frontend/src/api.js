@@ -63,6 +63,7 @@ export const api = {
     request(`/api/video/metadata${buildQuery(isNetworkUrl(target) ? { url: target } : { path: target })}`),
   streamUrl: (target) =>
     `/api/video/stream${buildQuery(isNetworkUrl(target) ? { url: target } : { path: target })}`,
+  fileUrl: (path) => `/api/fs/file${buildQuery({ path })}`,
   networkMounts: () => request('/api/fs/network-mounts'),
   mountNetwork: (payload) => request('/api/fs/network-mount', {
     method: 'POST',

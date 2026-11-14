@@ -9,6 +9,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from fastapi import HTTPException
+
 import config
 from config import (
     PathSecurityError,
@@ -155,6 +157,62 @@ class DriveShortcutTests(unittest.TestCase):
             payload = asyncio.run(filesystem.list_directory(path=str(drive)))
 
         self.assertIn("clip.mp4", {entry["name"] for entry in payload["entries"]})
+
+
+class FileEndpointTests(unittest.TestCase):
+    """``GET /api/fs/file`` serves point clouds without exposing the whole mount."""
+
+    def setUp(self) -> None:
+        self._original_root = config.host_root()
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name).resolve()
+        config.set_host_mount_path(self.root)
+        (self.root / "media").mkdir()
+        self.cloud = self.root / "media" / "clip.ply"
+        self.cloud.write_bytes(b"ply\nformat ascii 1.0\nelement vertex 0\nend_header\n")
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+        config.set_host_mount_path(self._original_root)
+
+    def test_point_clouds_get_their_own_listing_kind(self) -> None:
+        from routers import filesystem
+
+        payload = asyncio.run(filesystem.list_directory(path=str(self.root / "media")))
+        entry = next(item for item in payload["entries"] if item["name"] == "clip.ply")
+        self.assertEqual(entry["kind"], "point_cloud")
+
+    def test_ply_files_are_served_inline(self) -> None:
+        from routers import filesystem
+
+        response = asyncio.run(filesystem.get_file(path=str(self.cloud)))
+        self.assertEqual(response.media_type, "application/octet-stream")
+        self.assertEqual(Path(response.path), self.cloud)
+        self.assertEqual(response.headers["cache-control"], "no-store")
+        self.assertIn("inline", response.headers["content-disposition"])
+
+    def test_extensions_outside_the_allow_list_are_rejected(self) -> None:
+        from routers import filesystem
+
+        secret = self.root / "media" / "notes.txt"
+        secret.write_text("not servable")
+        with self.assertRaises(HTTPException) as context:
+            asyncio.run(filesystem.get_file(path=str(secret)))
+        self.assertEqual(context.exception.status_code, 400)
+
+    def test_paths_outside_the_mount_are_rejected(self) -> None:
+        from routers import filesystem
+
+        with self.assertRaises(HTTPException) as context:
+            asyncio.run(filesystem.get_file(path=str(self.root / ".." / "escape.ply")))
+        self.assertEqual(context.exception.status_code, 403)
+
+    def test_missing_files_return_404(self) -> None:
+        from routers import filesystem
+
+        with self.assertRaises(HTTPException) as context:
+            asyncio.run(filesystem.get_file(path=str(self.root / "media" / "missing.ply")))
+        self.assertEqual(context.exception.status_code, 404)
 
 
 if __name__ == "__main__":

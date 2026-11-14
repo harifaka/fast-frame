@@ -17,6 +17,7 @@ import config
 from config import (
     DEFAULT_SUBTITLE_FONT_SIZE,
     OUTPUT_EXTENSIONS,
+    POINT_CLOUD_EXTENSIONS,
     PathSecurityError,
     SPHERICAL_EXTENSIONS,
     SUBTITLE_EXTENSIONS,
@@ -163,6 +164,8 @@ async def system_config() -> dict:
         "spherical_extensions": list(SPHERICAL_EXTENSIONS),
         "subtitle_extensions": list(SUBTITLE_EXTENSIONS),
         "output_extensions": list(OUTPUT_EXTENSIONS),
+        "point_cloud_extensions": list(POINT_CLOUD_EXTENSIONS),
+        "file_endpoint": "/api/fs/file",
         "speed": {"min": SUPPORTED_SPEED_MIN, "max": SUPPORTED_SPEED_MAX},
         "subtitle_font_sizes": SUBTITLE_FONT_SIZES,
         "default_subtitle_font_size": DEFAULT_SUBTITLE_FONT_SIZE,

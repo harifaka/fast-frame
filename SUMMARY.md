@@ -1,6 +1,6 @@
 # Fast-Frame — Implementation Summary
 
-All eleven phases from `ROADMAP.md` are implemented, verified and committed.
+All twelve phases from `ROADMAP.md` are implemented, verified and committed.
 
 ## ▶ Run it when you're back
 
@@ -201,11 +201,34 @@ Full setup, troubleshooting and API docs: [`README.md`](README.md). Every autono
   status, `Generate .ply` button and a live progress bar polling the status endpoint. `AiViewPanel`
   gains a `3D cloud` shortcut.
 
+### Phase 12 — In-browser 3D point cloud viewer & fly camera
+- **3D engine:** `three` 0.170 + `@react-three/fiber` 8.18 + `@react-three/drei` 9.122 (the React 18
+  majors), lazy-loaded so three.js sits in its own chunk (~845 kB) and the studio entry bundle stays
+  at ~300 kB.
+- **`PointCloudViewer.jsx`:** full-screen WebGL modal over the studio. `useLoader(PLYLoader, url)`
+  fetches the cloud from the API, `<points>` + vertex-coloured `<pointsMaterial>` renders it, and
+  drei's `<FlyControls>` provides WASD/mouse flight (`Q`/`E` roll, `R`/`F` up/down, `Shift` precision).
+  Camera framing, movement speed and the default point size are derived from the bounding box; the
+  cloud is centred by offsetting the `points` object so the cached geometry is never mutated. A HUD
+  shows the file, point count, the *"WASD to move · Mouse to look · ESC to close"* legend plus
+  point-size/speed sliders, and an error boundary reports unparsable files.
+- **`GET /api/fs/file?path=…`:** inline `FileResponse` for `.ply`, video containers and `.srt` inside
+  the validated host mount. It is an explicit allow-list — everything else returns HTTP 400 — so the
+  API still cannot read arbitrary host documents.
+- **Listing & config:** `.ply` files now appear with `kind: "point_cloud"`, are served as
+  `application/octet-stream` (avoids browser sniffing breaking PLYLoader) and
+  `/api/system/config` exposes `point_cloud_extensions` + `file_endpoint`.
+- **UI wiring:** **🎮 View 3D** appears in the export card once a generation completes and in the file
+  browser footer when a `.ply` is selected (replacing *Use this video* in source mode, offered next to
+  *Use this folder* in destination mode). `.ply` rows get a 3D icon/badge and are clickable in both
+  modes; double-click opens the viewer. `App.jsx` owns one `pointCloudView` state, and the drawer and
+  browser ignore `Esc` while the overlay is open.
+
 ---
 
 ## Verification performed
 
-- **181 backend unit tests pass** (`python -m unittest discover -s tests`): atempo math, filter-graph
+- **186 backend unit tests pass** (`python -m unittest discover -s tests`): atempo math, filter-graph
   ordering, multi-cut concat, subtitle escaping/ordering, NVENC command flags, fps-mode
   compatibility, crop pixel math (rotation-aware, even), target duration, filename sanitising,
   collision protection, network URL/SMB helpers, the host-mount rules (lexical `..` rejection,
@@ -217,7 +240,10 @@ Full setup, troubleshooting and API docs: [`README.md`](README.md). Every autono
   expression builder incl. segment re-timing. Phase 11 adds sampling/rate caps, percentile depth
   mapping, rectilinear + equirectangular projection (radius = depth), voxel filtering/accumulator
   compaction, binary PLY writer, the background export pipeline, busy/network/missing-folder guards,
-  and the YOLO11s default + threshold checks.
+  and the YOLO11s default + threshold checks. Phase 12 adds `GET /api/fs/file` coverage: `.ply`
+  served inline as `application/octet-stream`, the extension allow-list rejecting everything else,
+  `..` traversal rejection and a 404 for missing files, plus `.ply` listing as
+  `kind: "point_cloud"`.
 - **FastAPI app imports cleanly** and exposes every route; WebSocket snapshot + progress events
   verified against a live render (percent rose 0 → 21 → 45 → 69 → 91 → 100 with FPS/speed/ETA).
 - **Real FFmpeg renders verified**:
@@ -232,6 +258,21 @@ Full setup, troubleshooting and API docs: [`README.md`](README.md). Every autono
   browser: file browsing, metadata, playback-rate sync, timeline segment creation, subtitle
   auto-detect, rotation/crop overlay dragging, queueing 3 jobs, cancel, clear finished, preset
   save/apply.
+- **Phase 12 verified in a real browser and container** (Docker 29.9.2, `docker build` +
+  `docker run -v C:\temp\ff-host:/mnt/host`):
+  - `npm run build` succeeds with the new deps; the bundle splits into `index` (300.8 kB / 86.4 kB
+    gzip) and a lazy `PointCloudViewer` chunk (845.3 kB / 228.3 kB gzip), so three.js is only
+    fetched when a cloud is opened.
+  - `python -m unittest discover -s tests` runs **186 tests, all OK** (5 new `/api/fs/file` cases).
+  - In the container, `GET /api/fs/file?path=/mnt/host/media/demo-cloud.ply` returned HTTP 200,
+    `application/octet-stream`, `Content-Length: 450209`,
+    `Content-Disposition: inline; filename="demo-cloud.ply"`, and `/api/system/config` reported
+    `file_endpoint=/api/fs/file`, `point_cloud_extensions=[".ply"]`.
+  - Browser walkthrough against the container-served build: **Browse host files** → `media` →
+    click `demo-cloud.ply` (row shows the *3D · view* badge) → the primary action switches to
+    **🎮 View 3D** → the WebGL overlay reported **30,000 pts** and rendered the cloud with vertex
+    colours. Holding `W` moved the camera forward and moving the mouse yawed the view (FlyControls
+    verified live), and `Esc` closed the overlay while the file browser stayed open.
 - **Phase 11 verified with a real Docker build and container** (`docker compose up --build -d`,
   Docker 29.9.2 / Compose v5.6.1):
   - `npm run build` succeeds (297.7 kB JS / 39.8 kB CSS after the point-cloud card); `python -m
@@ -301,6 +342,15 @@ Full setup, troubleshooting and API docs: [`README.md`](README.md). Every autono
 - Path validation is lexical first (`..` rejected), then mount-aware: symlinks may resolve outside
   `/mnt/host` only inside the `drives`/`c` bind mounts or below a real mount point. Validation
   returns the lexical path so browser-facing entry paths stay canonical.
+- The 3D viewer stays on `@react-three/fiber` v8 / drei v9 (React 18) instead of upgrading React to
+  19, is lazy-loaded into its own chunk, and uses `FlyControls` rather than `PointerLockControls` so
+  `Esc` remains a reliable close key (pointer lock consumes it to release the cursor).
+- `GET /api/fs/file` is an extension allow-list (`.ply` + video + `.srt`), not a generic host-file
+  reader; `.ply` is served as `application/octet-stream` to stop content sniffing from breaking
+  `PLYLoader`.
+- Camera distance, near/far, flight speed and default point size come from the cloud's bounding box,
+  because exported clouds have no metric scale; the parsed geometry is never mutated (the `points`
+  object is offset instead) so reopening a file is cheap.
 - The image keeps Debian's `ffmpeg` package (and its large GL/Vulkan dependency set) instead of a
   third-party static build, because that combination was verified to expose `h264_nvenc`/
   `hevc_nvenc` through driver injection on the test machine.
