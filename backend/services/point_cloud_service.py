@@ -73,6 +73,21 @@ DEPTH_MODEL_DOWNLOAD_TIMEOUT = 300.0
 DEFAULT_DEPTH_MODEL_KIND = os.environ.get("AI_DEPTH_MODEL_KIND", "midas")
 
 
+def depth_model_filename() -> str:
+    """Cache filename for the configured depth URL.
+
+    A custom ``AI_DEPTH_MODEL_URL`` gets its own filename, so switching between
+    MiDaS and Depth Anything (Lite vs Pro) never reuses stale weights; the
+    default keeps the historical ``midas-v21-small.onnx`` name so existing
+    ``/models`` folders are reused instead of re-downloaded.
+    """
+
+    return (
+        model_cache.url_filename(os.environ.get("AI_DEPTH_MODEL_URL", ""))
+        or DEFAULT_DEPTH_MODEL_NAME
+    )
+
+
 class PointCloudError(RuntimeError):
     """Raised when a point cloud export cannot be satisfied."""
 
@@ -414,7 +429,7 @@ class DepthEstimator:
         options.intra_op_num_threads = max(1, (os.cpu_count() or 2) // 2)
         options.log_severity_level = 3
         self._session = ort.InferenceSession(
-            str(path), sess_options=options, providers=["CPUExecutionProvider"]
+            str(path), sess_options=options, providers=model_cache.ort_providers(ort)
         )
         spec = self._session.get_inputs()[0]
         self._input_name = spec.name
@@ -429,6 +444,15 @@ class DepthEstimator:
         # Depth Anything predicts depth (near = small); negate so every model
         # downstream sees a "higher = closer" closeness map.
         self._invert = bool(invert)
+        self.provider = model_cache.session_provider(self._session)
+        self.weights = model_cache.weights_label()
+        model_cache.log_session_ready(
+            logger,
+            label="monocular depth",
+            model_path=path,
+            session=self._session,
+            detail=f" | input={self.input_width}x{self.input_height}",
+        )
 
     def predict(self, frame: Any) -> Any:
         """Return a ``frame`` sized closeness map (higher = closer)."""
@@ -529,7 +553,7 @@ class PointCloudService:
     def _ensure_model(self) -> Path:
         try:
             return model_cache.ensure_model(
-                filename=DEFAULT_DEPTH_MODEL_NAME,
+                filename=depth_model_filename(),
                 url=DEFAULT_DEPTH_MODEL_URL,
                 configured=self._model_path,
                 directory=DEFAULT_DEPTH_MODEL_DIR,
@@ -600,7 +624,10 @@ class PointCloudService:
                 "loading": bool(self._resolving or (not self._resolved and not self._model_error)),
                 "backend": estimator.name if estimator else None,
                 "model": estimator.model if estimator else (self._model_path or None),
-                "model_name": DEFAULT_DEPTH_MODEL_NAME,
+                "provider": getattr(estimator, "provider", None),
+                "weights": getattr(estimator, "weights", None),
+                "edition": config.app_edition(),
+                "model_name": depth_model_filename(),
                 "model_url": DEFAULT_DEPTH_MODEL_URL or None,
                 "reason": self._model_error,
             }

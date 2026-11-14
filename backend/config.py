@@ -45,6 +45,14 @@ GPU_INFO_CACHE_SECONDS = 30.0
 FFMPEG_BIN = os.environ.get("FFMPEG_BIN", "ffmpeg")
 FFPROBE_BIN = os.environ.get("FFPROBE_BIN", "ffprobe")
 
+#: ``pro`` selects the heavyweight GPU AI weights (``docker-compose.pro.yml``);
+#: anything else is the default lightweight edition.
+DEFAULT_APP_EDITION = "community"
+
+
+def app_edition() -> str:
+    return os.environ.get("APP_EDITION", "").strip().lower() or DEFAULT_APP_EDITION
+
 
 def _initial_mount_path() -> Path:
     raw = os.environ.get("HOST_MOUNT_PATH", "/mnt/host")

@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-from config import FFMPEG_BIN, is_network_url, is_spherical_file
+from config import FFMPEG_BIN, app_edition, is_network_url, is_spherical_file
 from services import model_cache
 from services.model_cache import ModelCacheError
 
@@ -658,11 +658,20 @@ class OnnxRuntimeDetector(DetectorBackend):
         options.intra_op_num_threads = max(1, (os.cpu_count() or 2) // 2)
         options.log_severity_level = 3
         self._session = ort.InferenceSession(
-            str(path), sess_options=options, providers=["CPUExecutionProvider"]
+            str(path), sess_options=options, providers=model_cache.ort_providers(ort)
         )
         self._input_name = self._session.get_inputs()[0].name
         shape = self._session.get_inputs()[0].shape
         self._size = int(shape[2]) if isinstance(shape[2], int) else 640
+        self.provider = model_cache.session_provider(self._session)
+        self.weights = model_cache.weights_label()
+        model_cache.log_session_ready(
+            logger,
+            label="YOLO tracking",
+            model_path=path,
+            session=self._session,
+            detail=f" | input={self._size}px",
+        )
 
     def detect(self, frame: Any, width: int, height: int) -> list[Detection]:
         import numpy as np
@@ -854,7 +863,9 @@ class YoloTrackingService:
 
         try:
             target = model_cache.ensure_model(
-                filename=DEFAULT_MODEL_NAME,
+                # The URL decides the cache name so the Pro YOLO11m weights never
+                # reuse (or overwrite) a cached Lite yolo11s file.
+                filename=model_cache.url_filename(DEFAULT_MODEL_URL) or DEFAULT_MODEL_NAME,
                 url=DEFAULT_MODEL_URL,
                 configured=self._model_path,
                 directory=DEFAULT_MODEL_DIR,
@@ -893,6 +904,9 @@ class YoloTrackingService:
                     "loading": True,
                     "backend": None,
                     "model": self._model_path or None,
+                    "provider": None,
+                    "weights": None,
+                    "edition": app_edition(),
                     "reason": "Loading the YOLO runtime…",
                     "preference": self._backend_preference,
                     "model_url": DEFAULT_MODEL_URL or None,
@@ -908,6 +922,9 @@ class YoloTrackingService:
             "loading": False,
             "backend": detector.name if detector else None,
             "model": detector.model if detector else (self._model_path or None),
+            "provider": getattr(detector, "provider", None),
+            "weights": getattr(detector, "weights", None),
+            "edition": app_edition(),
             "reason": None if detector else self.unavailable_reason,
             "preference": self._backend_preference,
             "model_url": DEFAULT_MODEL_URL or None,

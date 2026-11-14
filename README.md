@@ -132,6 +132,9 @@ docker compose pull && docker compose up -d
 docker compose up --build -d
 ```
 
+For the GPU-accelerated heavyweight AI edition see
+[Pro edition](#pro-edition-gpu-accelerated-heavyweight-ai).
+
 Open **http://localhost:8000**. From another device on your LAN use
 **`http://<windows-host-ip>:8000`** — the port is published on `0.0.0.0` and Windows Defender
 Firewall asks to allow it the first time the container starts.
@@ -218,6 +221,52 @@ docker compose -f docker-compose.yml -f docker-compose.cpu.yml up --build -d
 the container starts on machines without an NVIDIA driver. Renders use `libx264`/`libx265` and
 `/api/system/gpu-check` reports `status: "fallback"` with the reason. Use this file as the base
 compose file (e.g. rename it or pass both `-f` flags) whenever you run without a GPU.
+
+### Pro edition (GPU-accelerated heavyweight AI)
+
+The default image runs both ONNX models on the CPU. The Pro overlay installs the CUDA build of the
+ONNX runtime and swaps in heavier weights, so framing and depth inference run on your NVIDIA GPU:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.pro.yml up --build -d
+```
+
+Everything else — host mounts, ports, `gpus: all` and the injected NVENC driver — is inherited from
+`docker-compose.yml`; the overlay only changes the build and the AI configuration:
+
+| | Lite (default) | Pro (`-f docker-compose.pro.yml`) |
+| --- | --- | --- |
+| AI runtime | `onnxruntime` (CPU) | `onnxruntime-gpu[cuda,cudnn]` + `nvidia-cublas` |
+| Tracking model | YOLO11s, ~36 MB | YOLO11m, ~81 MB |
+| Depth model | MiDaS v2.1 Small, ~64 MB | Depth Anything V2 Base, ~389 MB |
+| Execution provider | `CPUExecutionProvider` | `CUDAExecutionProvider` (CPU fallback) |
+| Image tag | `…:latest` | `…:latest-pro` |
+
+The first start downloads the two heavier models (~470 MB in total) into `./models`, next to any
+Lite files. Cache filenames are derived from the download URL — `yolo11m.onnx`,
+`depth-anything-v2-base-model.onnx` — so both editions can share the same bind mount without
+overwriting each other.
+
+Check which device and weight set a model bound to in the container log:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.pro.yml logs fast-frame | grep "AI "
+# AI YOLO tracking ready | edition=pro | weights=Pro | device=CUDA | provider=CUDAExecutionProvider | model=yolo11m.onnx | input=640px
+# AI monocular depth ready | edition=pro | weights=Pro | device=CUDA | provider=CUDAExecutionProvider | model=depth-anything-v2-base-model.onnx | input=518x518
+```
+
+`/api/system/config` reports `edition`, and the tracking / point-cloud status endpoints include
+`provider` and `weights`, so the UI or a script can confirm the GPU is actually in use.
+
+Notes:
+
+- The CUDA 13 / cuDNN 9 libraries come from PyPI wheels (`~2 GB`), the driver still comes from the
+  NVIDIA Container Toolkit — no CUDA base image is used. A driver new enough for CUDA 13 (R580+) is
+  required, and the Pro image is several GB larger than the Lite one.
+- If the CUDA provider cannot load, onnxruntime falls back to `CPUExecutionProvider`, logs a warning
+  (`… fell back to the CPU provider …`) and the app keeps working, just slower.
+- Prefer the 1.3 GB Depth Anything V2 Large? Replace `base` with `large` in `AI_DEPTH_MODEL_URL`;
+  it caches under a different filename, so the Base weights are not reused by mistake.
 
 ---
 
@@ -406,7 +455,9 @@ copy yolo11s.onnx models\
 docker compose -f docker-compose.yml -f docker-compose.ai.yml up -d
 ```
 
-Build with `--build-arg INSTALL_AI_TRACKING=0` for the slim image without AI tracking.
+Build with `--build-arg INSTALL_AI_TRACKING=0` for the slim image without AI tracking. The
+[Pro overlay](#pro-edition-gpu-accelerated-heavyweight-ai) installs `onnxruntime-gpu` and YOLO11m
+instead and logs the resulting provider (`CUDA` or `CPU`) at startup.
 `GET /api/ai/tracking/status` (and `/api/system/config`) report whether a backend was found and why
 not, so the UI can show an actionable hint instead of failing silently. If the runtime is missing,
 the API still works and `Analyse clip` reports *tracker unavailable*.
@@ -434,8 +485,9 @@ How it works:
 
 1. FFmpeg decodes frames at the requested rate (default cap: 600 frames). The source must be a
    local/seekable file; network URLs are rejected with a clear message.
-2. MiDaS v2.1 Small ONNX (~64 MB, `1×3×256×256` input) predicts an inverse-depth map on CPU. The
-   map is percentile-stretched into pseudo-metric metres (0.5–50 m).
+2. MiDaS v2.1 Small ONNX (~64 MB, `1×3×256×256` input) predicts an inverse-depth map on the CPU
+   (the [Pro overlay](#pro-edition-gpu-accelerated-heavyweight-ai) swaps in Depth Anything V2 Base on
+   CUDA). The map is percentile-stretched into pseudo-metric metres (0.5–50 m).
 3. Pixels are back-projected: rectilinear clips use a pinhole camera (60° horizontal FOV), while
    `.insp`/`.insv` sources use equirectangular spherical projection. Every point keeps its RGB.
 4. A numpy voxel-grid filter runs whenever the accumulator reaches 4 M points (bounding RAM on long
@@ -447,7 +499,9 @@ How it works:
 The depth model is downloaded at startup alongside the YOLO weights into
 `AI_TRACKING_MODEL_DIR` (`/models`, bind-mounted from `./models`). Pin your own file with
 `AI_DEPTH_MODEL=/models/<file>.onnx`; `AI_DEPTH_MODEL_KIND=depth_anything` inverts Depth Anything
-V2 outputs (depth instead of inverse depth) so they still map to closeness correctly.
+V2 outputs (depth instead of inverse depth) so they still map to closeness correctly. That is
+exactly what the [Pro overlay](#pro-edition-gpu-accelerated-heavyweight-ai) does when it points
+`AI_DEPTH_MODEL_URL` at Depth Anything V2 Base and runs the model on CUDA.
 
 ### 3D fly-through viewer (Phase 12)
 
@@ -620,6 +674,7 @@ Environment variables:
 | `HOST_MOUNT_PATH` | `/mnt/host` | Root of the zero-copy file browser |
 | `FFMPEG_BIN` | `ffmpeg` | FFmpeg executable (full path allowed) |
 | `FFPROBE_BIN` | `ffprobe` | ffprobe executable |
+| `APP_EDITION` | `community` | `community` (Lite weights) or `pro` (GPU/heavyweight; set by `docker-compose.pro.yml`) |
 | `AI_TRACKING_BACKEND` | `auto` | `auto`, `ultralytics` or `onnx` |
 | `AI_TRACKING_MODEL` | — | Path to a YOLO `.onnx` (or `.pt` for ultralytics); empty auto-downloads |
 | `AI_TRACKING_MODEL_DIR` | `/models` | Cache directory for the auto-downloaded weights |
@@ -628,11 +683,12 @@ Environment variables:
 | `AI_DEPTH_MODEL_DIR` | `AI_TRACKING_MODEL_DIR` or `/models` | Cache directory for the depth model |
 | `AI_DEPTH_MODEL_URL` | MiDaS v2.1 Small asset | Override the depth weights download |
 | `AI_DEPTH_MODEL_KIND` | `midas` | `midas` (inverse depth) or `depth_anything` (depth) |
-| `AI_DEPTH_INPUT_SIZE` | `256` | Input size used when a model declares a dynamic shape |
+| `AI_DEPTH_INPUT_SIZE` | `256` | Input size used when a model declares a dynamic shape (`518` for Depth Anything V2) |
 
 The default image already contains `onnxruntime` + numpy. If you built with
 `--build-arg INSTALL_AI_TRACKING=0`, reinstall with `pip install -r backend/requirements-ai.txt`
-or `pip install ultralytics`; without either, everything else still works and
+(or `pip install -r backend/requirements-pro.txt` for the CUDA runtime) or
+`pip install ultralytics`; without either, everything else still works and
 `/api/ai/tracking/status` explains what is missing.
 
 Tests (stdlib `unittest`, no FFmpeg required; the ONNX post-processing tests skip when numpy is not
@@ -685,6 +741,7 @@ fast-frame/
 ├── docker-compose.yml         # GPU passthrough + automatic host drive mounts
 ├── docker-compose.cpu.yml     # CPU-only override (gpus: []) for machines without NVIDIA drivers
 ├── docker-compose.ai.yml      # Optional overlay pinning a specific ONNX model file
+├── docker-compose.pro.yml     # Pro overlay: onnxruntime-gpu + YOLO11m / Depth Anything V2 Base
 ├── models/                    # Auto-downloaded YOLO11s + MiDaS ONNX weights (or your own)
 ├── .github/workflows/release.yml  # push to main -> GHCR image + v<commit-count> release
 ├── backend/
@@ -692,6 +749,7 @@ fast-frame/
 │   ├── config.py              # Mount root, drive shortcuts, path-traversal defence
 │   ├── models.py              # Pydantic job/options + AI framing models
 │   ├── requirements-ai.txt    # numpy/onnxruntime for YOLO tracking (installed by default)
+│   ├── requirements-pro.txt   # onnxruntime-gpu + CUDA/cuDNN wheels (Pro build only)
 │   ├── routers/{filesystem,network,queue,ai}.py
 │   └── services/
 │       ├── ai_view_service.py # AI framing state + MCP command handling

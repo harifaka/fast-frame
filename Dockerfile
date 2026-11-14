@@ -29,6 +29,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
     NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
 
+# pip extras for the CUDA build; the packages live under site-packages/nvidia/.
+# The paths are simply ignored by the loader when the Lite image drops them.
+ENV LD_LIBRARY_PATH=/usr/local/lib/python3.11/site-packages/nvidia/cublas/lib:/usr/local/lib/python3.11/site-packages/nvidia/cudnn/lib:/usr/local/lib/python3.11/site-packages/nvidia/cuda_runtime/lib:/usr/local/lib/python3.11/site-packages/nvidia/cufft/lib:/usr/local/lib/python3.11/site-packages/nvidia/curand/lib:/usr/local/lib/python3.11/site-packages/nvidia/nvrtc/lib
+
 # ffmpeg (NVENC + libass for subtitle burn-in) and cifs-utils for kernel SMB
 # mounts; curl is intentionally not installed, the healthcheck uses Python.
 RUN apt-get update \
@@ -40,16 +44,23 @@ RUN apt-get update \
 
 WORKDIR /app
 
-COPY backend/requirements.txt backend/requirements-ai.txt ./
+COPY backend/requirements.txt backend/requirements-ai.txt backend/requirements-pro.txt ./
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
 # YOLO auto-framing + monocular-depth point clouds share one runtime
-# (numpy + onnxruntime, ~80 MB). Installed by default so AI tracking and the
-# 3D exporter work out of the box; pass --build-arg INSTALL_AI_TRACKING=0 for
+# (numpy + onnxruntime). Installed by default so AI tracking and the 3D
+# exporter work out of the box; pass --build-arg INSTALL_AI_TRACKING=0 for
 # the slim image without them. PyTorch is never installed.
+#
+# INSTALL_PRO_AI=1 (used by docker-compose.pro.yml) swaps the CPU runtime for
+# onnxruntime-gpu plus the CUDA 13 / cuDNN 9 wheels, so the heavyweight Pro
+# models execute on the host's NVIDIA GPU.
 ARG INSTALL_AI_TRACKING=1
-RUN if [ "$INSTALL_AI_TRACKING" = "1" ]; then \
+ARG INSTALL_PRO_AI=0
+RUN if [ "$INSTALL_PRO_AI" = "1" ]; then \
+        pip install --no-cache-dir -r requirements-pro.txt; \
+    elif [ "$INSTALL_AI_TRACKING" = "1" ]; then \
         pip install --no-cache-dir -r requirements-ai.txt; \
     fi
 
@@ -61,7 +72,10 @@ COPY --from=frontend-build /frontend/dist frontend/dist
 # AI_TRACKING_MODEL / AI_DEPTH_MODEL are empty the services download the
 # YOLO11s detector (~36 MB) and the MiDaS v2.1 Small depth model (~64 MB) once
 # into AI_TRACKING_MODEL_DIR (bind-mount it to keep them cached).
-ENV AI_TRACKING_BACKEND=auto \
+# docker-compose.pro.yml overrides APP_EDITION and both model URLs with the
+# heavyweight YOLO11m / Depth Anything V2 weights.
+ENV APP_EDITION=community \
+    AI_TRACKING_BACKEND=auto \
     AI_TRACKING_MODEL= \
     AI_TRACKING_MODEL_DIR=/models \
     AI_DEPTH_MODEL= \

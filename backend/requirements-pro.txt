@@ -1,0 +1,22 @@
+# Pro edition AI runtime (Phase 13) - CUDA build of the ONNX runtime.
+#
+# Installed *instead of* requirements-ai.txt when the image is built with
+# --build-arg INSTALL_PRO_AI=1, which docker-compose.pro.yml does for you.
+# Both files pin the same numpy so the tensor code is identical.
+#
+# onnxruntime-gpu exposes CUDAExecutionProvider, so YOLO11m detection and Depth
+# Anything V2 inference run on the host's NVIDIA GPU. The `cuda` and `cudnn`
+# extras pull the CUDA 13 runtime, cuDNN 9, cuFFT, cuRAND and NVRTC wheels from
+# PyPI (the Dockerfile puts their site-packages/nvidia/*/lib folders on
+# LD_LIBRARY_PATH); cuBLAS is not part of those extras but the CUDA provider
+# dlopens it, so it is pinned explicitly. The GPU driver itself still comes from
+# the NVIDIA Container Toolkit, so no multi-GB CUDA base image is needed.
+#
+# Requires an NVIDIA driver new enough for CUDA 13 (R580+). If the CUDA provider
+# cannot load (missing GPU, older driver), onnxruntime falls back to
+# CPUExecutionProvider and the services log the fallback - the app keeps
+# working, just slower. These wheels are published for Linux x86-64 and
+# Windows x64 only.
+numpy==2.2.1
+onnxruntime-gpu[cuda,cudnn]==1.31.1
+nvidia-cublas==13.10.0.20

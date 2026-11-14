@@ -159,6 +159,7 @@ async def gpu_check(refresh: bool = False) -> dict:
 async def system_config() -> dict:
     return {
         "version": APP_VERSION,
+        "edition": config.app_edition(),
         "host_root": str(config.host_root()),
         "video_extensions": list(VIDEO_EXTENSIONS),
         "spherical_extensions": list(SPHERICAL_EXTENSIONS),

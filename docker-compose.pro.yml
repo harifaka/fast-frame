@@ -1,0 +1,36 @@
+# Pro edition overlay (Phase 13).
+#
+# Adds heavyweight, GPU-accelerated AI on top of the default stack:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.pro.yml up --build -d
+#
+# The container, ports, host mounts and NVIDIA passthrough are inherited from
+# docker-compose.yml; this file only changes the build (CUDA ONNX runtime) and
+# the AI model configuration (YOLO11m + Depth Anything V2 Base).
+#
+# The first start downloads ~470 MB of weights into ./models (bind-mounted from
+# the base file), so later restarts and rebuilds reuse the cached files.
+services:
+  fast-frame:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Keep the AI runtime, but install requirements-pro.txt (onnxruntime-gpu)
+        # instead of requirements-ai.txt (CPU onnxruntime).
+        INSTALL_AI_TRACKING: "1"
+        INSTALL_PRO_AI: "1"
+    # Separate tag so a Pro build never overwrites the released Lite image.
+    image: ghcr.io/harifaka/fast-frame:${FAST_FRAME_TAG:-latest}-pro
+    environment:
+      APP_EDITION: pro
+      # Force the ONNX backend (the CUDA provider lives in onnxruntime-gpu).
+      AI_TRACKING_BACKEND: onnx
+      # YOLO11m: ~81 MB, the mid-size model - cleaner boxes on fast motion and
+      # stretched equirectangular edges than the Lite YOLO11s (~36 MB).
+      AI_TRACKING_MODEL_URL: https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo11m.onnx
+      # Depth Anything V2 Base (ViT-B, ~389 MB). For the ViT-L variant (~1.3 GB)
+      # replace `base` with `large` in the URL below; it gets its own cache file.
+      AI_DEPTH_MODEL_URL: https://huggingface.co/onnx-community/depth-anything-v2-base/resolve/main/onnx/model.onnx
+      AI_DEPTH_MODEL_KIND: depth_anything
+      AI_DEPTH_INPUT_SIZE: "518"

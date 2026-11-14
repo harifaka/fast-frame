@@ -2,9 +2,10 @@
 ## GPU-Accelerated Video Speed & Processing Studio (Zero-Copy Docker WebApp)
 ## Development Roadmap & Specification
 
-**Status:** All eleven phases (1–11) are implemented, verified and committed.
-No roadmap item is outstanding; the phase specs below are the reference for
-behaviour that must not regress.
+**Status:** All thirteen phases (1–13) are implemented, verified and committed.
+Phase 13 (Pro edition / GPU AI) is code-complete but the heavyweight image is
+built manually by the user on demand. No roadmap item is outstanding; the phase
+specs below are the reference for behaviour that must not regress.
 
 **Contents**
 
@@ -40,7 +41,7 @@ The goal is to build a Dockerized, web-based video processing application utiliz
 
 ### 3. Phase Status at a Glance
 
-The project was built as twelve sequential phases. Every phase below is complete and
+The project was built as thirteen sequential phases. Every phase below is complete and
 verified; the detailed specifications in section 4 are kept as the regression contract.
 
 | Phase | Scope | Status |
@@ -57,6 +58,7 @@ verified; the detailed specifications in section 4 are kept as the regression co
 | 10 | Interactive 360° preview, horizon auto-align & out-of-the-box AI runtime | ✅ Implemented |
 | 11 | YOLO11s upgrade & lightweight ONNX 3D point cloud export | ✅ Implemented |
 | 12 | In-browser 3D point cloud viewer & fly camera | ✅ Implemented |
+| 13 | Pro edition infrastructure & heavyweight GPU AI models | ✅ Implemented (manual build) |
 
 Each phase lists the tasks it delivered and its definition of done.
 
@@ -298,14 +300,68 @@ flying camera (WASD + mouse) instead of forcing a download into MeshLab/CloudCom
 
 ---
 
+#### 🚀 PHASE 13: Pro Edition Infrastructure & Heavyweight GPU AI Models ✅
+**Status:** Implemented — the image itself is **built manually by the user** later;
+this phase only ships the code, configuration and documentation. No Docker build
+was executed while adding it.
+
+**Goal:** Ship an opt-in "Pro" stack that trades image size and model download
+time for high-accuracy YOLO framing and state-of-the-art monocular depth, running
+on the host's NVIDIA GPU instead of the CPU.
+
+**Delivered:**
+1. **`docker-compose.pro.yml` overlay.** Applied on top of the base file
+   (`docker compose -f docker-compose.yml -f docker-compose.pro.yml up --build -d`),
+   it passes `--build-arg INSTALL_PRO_AI=1`, tags the image `…-pro` so a Pro build
+   never overwrites the released Lite image, and sets `APP_EDITION=pro`,
+   `AI_TRACKING_BACKEND=onnx`, `AI_TRACKING_MODEL_URL` (YOLO11m, ~81 MB),
+   `AI_DEPTH_MODEL_URL` (Depth Anything V2 **Base** ONNX, ~389 MB),
+   `AI_DEPTH_MODEL_KIND=depth_anything` and `AI_DEPTH_INPUT_SIZE=518`. Host mounts,
+   ports and NVIDIA passthrough stay inherited from `docker-compose.yml`.
+2. **GPU runtime build.** `backend/requirements-pro.txt` pins
+   `onnxruntime-gpu[cuda,cudnn]==1.31.1` plus `nvidia-cublas`, and the Dockerfile
+   installs it *instead of* `requirements-ai.txt` when `INSTALL_PRO_AI=1`
+   (checked before `INSTALL_AI_TRACKING`). Its `site-packages/nvidia/*/lib`
+   folders go on `LD_LIBRARY_PATH`, so the GPU stack is pip-only while the driver
+   keeps coming from the NVIDIA Container Toolkit. `ENV APP_EDITION=community`
+   remains the default for every non-Pro build.
+3. **CUDA-first execution providers.** `services/model_cache.py` now owns
+   `ort_providers()` / `session_provider()` / `weights_label()` /
+   `log_session_ready()`; `OnnxRuntimeDetector` and `DepthEstimator` create their
+   sessions with `['CUDAExecutionProvider', 'CPUExecutionProvider']` (filtered to
+   the providers the installed wheel actually exposes) and log
+   `AI … ready | edition=… | weights=Lite|Pro | device=CUDA|CPU | provider=… | model=…`.
+   A Pro build that silently lands on CPU logs a warning pointing at
+   `onnxruntime-gpu` / `--gpus all`.
+4. **No cache collisions between editions.** Model cache filenames are derived from
+   the download URL (`url_filename()`), with Hugging Face URLs prefixed by their
+   repository name, so `models/yolo11s.onnx` (Lite) and `models/yolo11m.onnx`
+   (Pro) — or `depth-anything-v2-base-model.onnx` vs
+   `depth-anything-v2-large-model.onnx` — coexist in the same bind-mounted folder.
+   The default Lite download names are unchanged.
+5. **Status/debug surface.** `/api/system/config` reports `edition`, and the
+   tracking + point-cloud status payloads expose `provider`, `weights` and
+   `edition` next to the model name.
+
+**Definition of Done:**
+`python -m unittest discover -s tests` passes (including the new
+`tests/test_model_cache.py`), the overlay parses as valid Compose YAML, and the
+logging/provider plumbing is exercised without a GPU. Building and running the Pro
+image is an explicit manual follow-up for the user.
+
+---
+
 ### 5. Remaining Work
 
-**None.** Phases 1–12 cover the product scope in this roadmap and are all shipped.
+**None.** Phases 1–13 cover the product scope in this roadmap and are all shipped.
+Phase 13's Docker image is intentionally not pre-built: run
+`docker compose -f docker-compose.yml -f docker-compose.pro.yml up --build -d`
+when you want the GPU/heavyweight edition.
 
 - Phase 7's heading no longer carries an in-progress marker; all Phase 7 tasks
   (multi-stage slim image, zero-config host mounts, Quick drives bar, network /
   SMB / URL sources) are implemented and verified.
-- The top-level status and phase count reflect the twelve shipped phases.
+- The top-level status and phase count reflect the thirteen shipped phases.
 - The target structure below matches the files that actually exist — the neutral
   360° framing viewport is implemented inside `VideoWorkspace.jsx` with its
   controls in `AiViewPanel.jsx` and the horizon card in `ControlPanel.jsx`, so no
@@ -323,15 +379,17 @@ fast-frame/
 ├── docker-compose.yml          # GPU passthrough + automatic host drive mounts (/run/desktop/mnt/host & C:/)
 ├── docker-compose.cpu.yml      # CPU-only override (gpus: []) for machines without NVIDIA toolkit
 ├── docker-compose.ai.yml       # Optional overlay pinning a specific ONNX model file
+├── docker-compose.pro.yml      # Pro overlay: onnxruntime-gpu + YOLO11m / Depth Anything V2 weights
 ├── Dockerfile                  # Multi-stage slim image (Node 20 builder -> Python 3.11 slim + FFmpeg + NVENC env)
 ├── README.md
 ├── ROADMAP.md
 ├── DECISIONS.md
 ├── SUMMARY.md
-├── models/                     # Auto-downloaded YOLO11s + MiDaS depth ONNX weights (or your own)
+├── models/                     # Auto-downloaded YOLO/Depth ONNX weights (Lite + Pro, or your own)
 ├── backend/
 │   ├── requirements.txt
 │   ├── requirements-ai.txt     # numpy/onnxruntime for YOLO tracking (installed by default)
+│   ├── requirements-pro.txt    # onnxruntime-gpu + CUDA/cuDNN wheels (Pro build: INSTALL_PRO_AI=1)
 │   ├── main.py                 # FastAPI app, WebSocket & static frontend serving
 │   ├── config.py               # Mount paths (/mnt/host), symlink-safe validation, drive shortcuts, network helpers
 │   ├── models.py               # Pydantic job & options schemas

@@ -28,6 +28,26 @@ except ImportError:  # pragma: no cover - slim installs
     np = None
 
 
+class DepthModelCacheNameTests(unittest.TestCase):
+    """The Pro URL must not reuse the cached Lite MiDaS weights."""
+
+    def test_default_url_keeps_the_historical_cache_name(self) -> None:
+        with mock.patch.dict("os.environ", {"AI_DEPTH_MODEL_URL": ""}):
+            self.assertEqual(
+                cloud.depth_model_filename(), cloud.DEFAULT_DEPTH_MODEL_NAME
+            )
+
+    def test_custom_url_uses_its_own_cache_name(self) -> None:
+        url = (
+            "https://huggingface.co/onnx-community/depth-anything-v2-base/"
+            "resolve/main/onnx/model.onnx"
+        )
+        with mock.patch.dict("os.environ", {"AI_DEPTH_MODEL_URL": url}):
+            self.assertEqual(
+                cloud.depth_model_filename(), "depth-anything-v2-base-model.onnx"
+            )
+
+
 @unittest.skipUnless(np is not None, "numpy is not installed")
 class SamplingTests(unittest.TestCase):
     def test_still_sources_sample_once(self) -> None:
