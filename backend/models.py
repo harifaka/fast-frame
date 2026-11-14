@@ -154,6 +154,27 @@ class AiAutoAlignRequest(BaseModel):
     force: bool = False
 
 
+class PointCloudGenerateRequest(BaseModel):
+    """Export a monocular-depth 3D point cloud from a local source clip."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_path: str = Field(min_length=1)
+    output_path: str = Field(
+        min_length=1,
+        description="Target .ply path inside the host mount (extension is enforced)",
+    )
+    sample_rate: float = Field(
+        default=1.0,
+        gt=0,
+        le=5,
+        description="Frames sampled per second of source video",
+    )
+    max_frames: int = Field(default=600, ge=1, le=5000)
+    voxel_size: float = Field(default=0.05, gt=0, le=2)
+    max_points: int = Field(default=1_500_000, ge=1000, le=8_000_000)
+
+
 class AiViewStateUpdate(BaseModel):
     """Partial framing update; omitted fields keep their current value."""
 

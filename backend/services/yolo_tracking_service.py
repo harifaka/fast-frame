@@ -6,9 +6,9 @@ The service has two halves:
   three strength profiles and the smoothing/keyframe generation.  It is
   stdlib-only so it can be unit-tested without numpy or a model.
 * **Detection backends** - ``ultralytics`` when the package is installed, or
-  ``onnxruntime`` with YOLO ONNX weights.  The ONNX weights are downloaded once
-  on first use when ``AI_TRACKING_MODEL`` is empty, so the runtime installed by
-  the default image works without a manual model export.
+  ``onnxruntime`` with YOLO ONNX weights.  The YOLO11s weights are downloaded
+  once on first use when ``AI_TRACKING_MODEL`` is empty, so the runtime
+  installed by the default image works without a manual model export.
 
 Tracking is an *offline* pass: frames are sampled at a low rate once, resolved
 into ``pan``/``tilt``/``zoom`` keyframes, and the render itself only evaluates
@@ -21,17 +21,16 @@ import json
 import logging
 import math
 import os
-import shutil
 import subprocess
-import tempfile
 import threading
-import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 from config import FFMPEG_BIN, is_network_url, is_spherical_file
+from services import model_cache
+from services.model_cache import ModelCacheError
 
 logger = logging.getLogger(__name__)
 
@@ -43,16 +42,23 @@ MAX_KEYFRAMES = 1200
 FRAME_EXTRACT_TIMEOUT = 30.0
 DEFAULT_OUTPUT_ASPECT = 16.0 / 9.0
 
-#: ONNX weights fallback.  Ultralytics publishes YOLO11n (same ``(1, 84, N)``
-#: output as YOLOv8n) in their release assets, so the tracker can download it
-#: on first use instead of requiring a manual export.
-DEFAULT_MODEL_NAME = "yolo11n.onnx"
+#: ONNX weights fallback.  Ultralytics publishes YOLO11s (same ``(1, 84, N)``
+#: output as YOLOv8) in their v8.4.0 release assets.  The Small variant is far
+#: more precise on the distorted edges of equirectangular 360° frames while the
+#: ONNX file stays around 36 MB — still small enough to auto-download.
+DEFAULT_MODEL_NAME = "yolo11s.onnx"
 DEFAULT_MODEL_URL = os.environ.get(
     "AI_TRACKING_MODEL_URL",
-    "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.onnx",
+    "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo11s.onnx",
 )
 DEFAULT_MODEL_DIR = os.environ.get("AI_TRACKING_MODEL_DIR", "/models")
 MODEL_DOWNLOAD_TIMEOUT = 120.0
+
+#: Post-processing thresholds tuned for the more accurate Small model: a higher
+#: confidence floor suppresses the extra low-score boxes it now produces, and a
+#: looser NMS IoU keeps genuinely overlapping subjects (crowds, cyclists).
+DEFAULT_CONFIDENCE = 0.30
+DEFAULT_IOU_THRESHOLD = 0.50
 
 #: COCO classes the framer is willing to follow (people, pets, vehicles).
 TRACKABLE_CLASSES = frozenset(
@@ -112,7 +118,7 @@ LEVEL_PROFILES: dict[int, LevelProfile] = {
         max_speed_deg_per_second=35.0,
         margin=0.55,
         max_zoom=1.8,
-        min_confidence=0.35,
+        min_confidence=0.40,
     ),
     2: LevelProfile(
         level=2,
@@ -123,7 +129,7 @@ LEVEL_PROFILES: dict[int, LevelProfile] = {
         max_speed_deg_per_second=90.0,
         margin=0.28,
         max_zoom=2.6,
-        min_confidence=0.3,
+        min_confidence=0.35,
     ),
     3: LevelProfile(
         level=3,
@@ -134,7 +140,7 @@ LEVEL_PROFILES: dict[int, LevelProfile] = {
         max_speed_deg_per_second=240.0,
         margin=0.1,
         max_zoom=3.6,
-        min_confidence=0.25,
+        min_confidence=0.30,
     ),
 }
 
@@ -471,11 +477,17 @@ class UltralyticsDetector(DetectorBackend):
     def __init__(self, model_path: str | None = None) -> None:
         from ultralytics import YOLO  # imported lazily: ~torch-sized dependency
 
-        self.model = model_path or "yolov8n.pt"
+        self.model = model_path or "yolo11s.pt"
         self._net = YOLO(self.model)
 
     def detect(self, frame: Any, width: int, height: int) -> list[Detection]:
-        results = self._net.predict(frame, imgsz=640, conf=0.2, verbose=False)
+        results = self._net.predict(
+            frame,
+            imgsz=640,
+            conf=DEFAULT_CONFIDENCE,
+            iou=DEFAULT_IOU_THRESHOLD,
+            verbose=False,
+        )
         detections: list[Detection] = []
         for result in results:
             boxes = getattr(result, "boxes", None)
@@ -555,8 +567,8 @@ def _nms(boxes: Any, scores: Any, iou_threshold: float) -> list[int]:
 def decode_yolov8_output(
     output: Any,
     *,
-    confidence: float = 0.25,
-    iou_threshold: float = 0.45,
+    confidence: float = DEFAULT_CONFIDENCE,
+    iou_threshold: float = DEFAULT_IOU_THRESHOLD,
     src_width: int,
     src_height: int,
     scale: float = 1.0,
@@ -631,7 +643,7 @@ def decode_yolov8_output(
 
 
 class OnnxRuntimeDetector(DetectorBackend):
-    """``onnxruntime`` backend for an exported ``yolov8n.onnx`` (~12 MB)."""
+    """``onnxruntime`` backend for exported YOLO11 ONNX weights (~36 MB for ``s``)."""
 
     name = "onnxruntime"
 
@@ -685,13 +697,14 @@ def extract_frame(
     *,
     width: int = 0,
     height: int = 0,
+    target_width: int = SAMPLE_FRAME_WIDTH,
     ffmpeg_bin: str | None = None,
 ) -> tuple[bytes, int, int]:
     """Decode a single RGB24 frame through FFmpeg (no OpenCV dependency)."""
 
     # Resolved at call time so tests and FFMPEG_BIN overrides take effect.
     ffmpeg_bin = ffmpeg_bin or FFMPEG_BIN
-    target_width = SAMPLE_FRAME_WIDTH
+    target_width = max(64, int(target_width or SAMPLE_FRAME_WIDTH))
     target_height = 0
     if width > 0 and height > 0:
         target_height = max(2, int(round(target_width * height / width / 2)) * 2)
@@ -836,59 +849,32 @@ class YoloTrackingService:
         return None
 
     # ---------------------------------------------------------------- model
-    def _model_cache_path(self) -> Path:
-        """First writable cache location for the auto-downloaded weights."""
-
-        candidates = [Path(DEFAULT_MODEL_DIR), Path(tempfile.gettempdir()) / "fast-frame-models"]
-        for directory in candidates:
-            try:
-                directory.mkdir(parents=True, exist_ok=True)
-                probe = directory / ".write-test"
-                probe.write_bytes(b"")
-                probe.unlink()
-            except OSError:
-                continue
-            return directory / DEFAULT_MODEL_NAME
-        return Path(tempfile.gettempdir()) / DEFAULT_MODEL_NAME
-
     def _ensure_model(self) -> Path:
         """Return usable ONNX weights, downloading them once when needed."""
 
-        if self._model_path:
-            return Path(self._model_path)
-
-        target = self._model_cache_path()
-        if target.is_file() and target.stat().st_size > 0:
-            self._model_path = str(target)
-            return target
-
-        if not DEFAULT_MODEL_URL:
-            raise TrackingError(
-                "AI_TRACKING_MODEL is not set and AI_TRACKING_MODEL_URL is empty"
-            )
-
-        logger.info("Downloading YOLO model %s -> %s", DEFAULT_MODEL_URL, target)
-        partial = target.with_suffix(target.suffix + ".part")
         try:
-            with urllib.request.urlopen(
-                DEFAULT_MODEL_URL, timeout=MODEL_DOWNLOAD_TIMEOUT
-            ) as response, open(partial, "wb") as handle:
-                shutil.copyfileobj(response, handle, length=1 << 20)
-            if partial.stat().st_size == 0:
-                raise TrackingError("downloaded model was empty")
-            partial.replace(target)
-        except Exception as exc:
-            try:
-                partial.unlink()
-            except OSError:
-                pass
-            raise TrackingError(
-                f"could not download the YOLO model from {DEFAULT_MODEL_URL}: {exc}"
-            ) from exc
-
-        self._model_path = str(target)
+            target = model_cache.ensure_model(
+                filename=DEFAULT_MODEL_NAME,
+                url=DEFAULT_MODEL_URL,
+                configured=self._model_path,
+                directory=DEFAULT_MODEL_DIR,
+                timeout=MODEL_DOWNLOAD_TIMEOUT,
+                label="YOLO model",
+            )
+        except ModelCacheError as exc:
+            raise TrackingError(str(exc)) from exc
+        # Keep the resolved path visible in ``status()`` without re-resolving.
+        if not self._model_path and target.is_file():
+            self._model_path = str(target)
         return target
 
+    def warm_up(self) -> bool:
+        """Start loading/downloading the detector in the background."""
+
+        if self._resolved or self._resolving:
+            return False
+        self._begin_resolve()
+        return True
 
     @property
     def unavailable_reason(self) -> str:

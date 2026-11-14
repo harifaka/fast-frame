@@ -38,6 +38,7 @@ class LevelProfileTests(unittest.TestCase):
         self.assertGreater(smooth.margin, dynamic.margin)
         self.assertGreater(dynamic.margin, aggressive.margin)
         self.assertLess(smooth.max_zoom, aggressive.max_zoom)
+        self.assertGreater(smooth.min_confidence, aggressive.min_confidence)
 
     def test_level_is_validated(self) -> None:
         self.assertEqual(normalize_level("3"), 3)
@@ -46,6 +47,19 @@ class LevelProfileTests(unittest.TestCase):
             normalize_level(4)
         with self.assertRaises(TrackingError):
             normalize_level("fast")
+
+
+class ModelUpgradeTests(unittest.TestCase):
+    def test_default_weights_use_the_small_variant(self) -> None:
+        self.assertEqual(tracking.DEFAULT_MODEL_NAME, "yolo11s.onnx")
+        self.assertIn("yolo11s.onnx", tracking.DEFAULT_MODEL_URL)
+
+    def test_thresholds_are_tuned_for_the_small_model(self) -> None:
+        self.assertGreaterEqual(tracking.DEFAULT_CONFIDENCE, 0.30)
+        self.assertGreaterEqual(tracking.DEFAULT_IOU_THRESHOLD, 0.45)
+        defaults = tracking.decode_yolov8_output.__kwdefaults__ or {}
+        self.assertEqual(defaults.get("confidence"), tracking.DEFAULT_CONFIDENCE)
+        self.assertEqual(defaults.get("iou_threshold"), tracking.DEFAULT_IOU_THRESHOLD)
 
 
 class SubjectSelectionTests(unittest.TestCase):

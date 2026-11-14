@@ -1,14 +1,15 @@
-# AI auto-framing helper overlay (Phase 9).
+# AI helper overlay (Phases 9–11).
 #
-# The default image now ships the YOLO runtime and downloads the ONNX weights
-# on first detection, so this overlay is only useful to pin a specific model
-# file: it mounts ./models read-only and points AI_TRACKING_MODEL at it.
+# The default image ships the ONNX runtime and downloads both models on first
+# use, so this overlay is only useful to pin specific model files: it mounts
+# ./models read-only and points the services at them.
 #
-# Export weights once on any machine with Python:
+# Export/prepare the files once:
 #   pip install ultralytics
-#   yolo export model=yolo11n.pt format=onnx
-#   copy yolo11n.onnx models/           # PowerShell
-#   cp yolo11n.onnx models/             # bash
+#   yolo export model=yolo11s.pt format=onnx
+#   copy yolo11s.onnx models\                              # PowerShell
+#   curl -L -o models\midas-v21-small.onnx `
+#     https://github.com/isl-org/MiDaS/releases/download/v2_1/model-small.onnx
 #
 # Then start the stack with:
 #   docker compose -f docker-compose.yml -f docker-compose.ai.yml up -d
@@ -16,6 +17,7 @@ services:
   fast-frame:
     environment:
       AI_TRACKING_BACKEND: auto
-      AI_TRACKING_MODEL: /models/yolo11n.onnx
+      AI_TRACKING_MODEL: /models/yolo11s.onnx
+      AI_DEPTH_MODEL: /models/midas-v21-small.onnx
     volumes:
       - ./models:/models:ro

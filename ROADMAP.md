@@ -2,7 +2,7 @@
 ## GPU-Accelerated Video Speed & Processing Studio (Zero-Copy Docker WebApp)
 ## Development Roadmap & Specification
 
-**Status:** All nine phases (1–9) are implemented, verified and committed.
+**Status:** All eleven phases (1–11) are implemented, verified and committed.
 No roadmap item is outstanding; the phase specs below are the reference for
 behaviour that must not regress.
 
@@ -40,7 +40,7 @@ The goal is to build a Dockerized, web-based video processing application utiliz
 
 ### 3. Phase Status at a Glance
 
-The project was built as nine sequential phases. Every phase below is complete and
+The project was built as eleven sequential phases. Every phase below is complete and
 verified; the detailed specifications in section 4 are kept as the regression contract.
 
 | Phase | Scope | Status |
@@ -55,6 +55,7 @@ verified; the detailed specifications in section 4 are kept as the regression co
 | 8 | Insta360 `.insp` support & mock AI view selector (MCP-ready) | ✅ Implemented |
 | 9 | Ultra-lightweight YOLO tracking & 360° smart framing (3 strength levels) | ✅ Implemented |
 | 10 | Interactive 360° preview, horizon auto-align & out-of-the-box AI runtime | ✅ Implemented |
+| 11 | YOLO11s upgrade & lightweight ONNX 3D point cloud export | ✅ Implemented |
 
 Each phase lists the tasks it delivered and its definition of done.
 
@@ -261,14 +262,33 @@ A fresh `docker compose up --build` reports `onnxruntime` as the tracker backend
 
 ---
 
+#### 🧊 PHASE 11: Lightweight 3D Point Clouds & Smarter YOLO ✅
+**Goal:** Export a usable 3D point cloud from any clip using only the existing
+`onnxruntime` dependency, and improve auto-framing precision on distorted 360°
+frames without adding PyTorch or a CUDA base image.
+
+**Delivered:**
+1. **YOLO11s detector (`backend/services/yolo_tracking_service.py`):** the auto-downloaded fallback switches from `yolo11n.onnx` (10 MB) to `yolo11s.onnx` (~36 MB, Ultralytics `v8.4.0`). The Small model keeps markedly more detail at the stretched edges of equirectangular frames. Confidence floors were raised (0.40/0.35/0.30 across the three strength levels; ONNX decode default 0.30) and the class-agnostic NMS IoU threshold loosened to 0.50 so the extra low-score boxes are suppressed while genuinely overlapping subjects survive.
+2. **Shared model cache (`backend/services/model_cache.py`):** one atomic download helper used by both AI services. Files are cached in `AI_TRACKING_MODEL_DIR` (`/models`, bind-mounted from `./models`) with a temp-directory fallback, so a container recreate never re-downloads weights.
+3. **Monocular depth pipeline (`backend/services/point_cloud_service.py`):** samples frames through FFmpeg (default 1 fps, configurable 0.25–5 fps, hard frame cap), runs MiDaS v2.1 Small ONNX (`1×3×256×256` → inverse-depth map) on CPU, converts inverse depth to pseudo-metric metres with a percentile stretch, and back-projects every pixel. Rectilinear clips use a pinhole model (60° horizontal FOV, configurable); `.insp`/`.insv` sources use equirectangular spherical projection. RGB colours are carried into the cloud.
+4. **Bounded memory & output:** points accumulate in a `PointAccumulator` that voxel-grid filters (numpy) whenever the buffer reaches 4 M points, so multi-hour clips never exhaust RAM. The final cloud is voxel-filtered, stride-capped (`max_points`, default 1.5 M) and written as a binary little-endian `.ply` (x/y/z float32 + RGB uchar) via an atomic `.part` rename.
+5. **API (`backend/routers/ai.py`):** `POST /api/ai/point-cloud/generate` (source, `.ply` destination, sample rate, frame/point caps) starts a background job and `GET /api/ai/point-cloud/status` reports state, phase, progress, frame/point counters, depth-model availability and errors. Output paths are validated against the host mount; network URLs are rejected with a clear message. Concurrent exports return HTTP 409.
+6. **Startup warm-up (`backend/main.py`):** both ONNX models are downloaded/loaded in background threads during lifespan startup, and `/api/system/config` exposes the point-cloud endpoints, defaults and depth-model status.
+7. **UI (`frontend/src/components/PointCloudPanel.jsx`, `ControlPanel.jsx`, `AiViewPanel.jsx`):** a new **3D Point Cloud Export (.ply)** card in `Automation` with an editable destination, 0.25/0.5/1/2/5 fps sample-rate selector (default 1 fps), frame estimate, depth-model status chip, `Generate .ply` button and a live progress bar polling `/api/ai/point-cloud/status`. The AI View panel gains a `3D cloud` shortcut that jumps to the card.
+
+**Definition of Done:**
+`npm run build` succeeds, `python -m unittest discover -s tests` passes, the Docker image still contains no PyTorch, and a fresh container downloads `yolo11s.onnx` + `midas-v21-small.onnx` into `./models` while exposing the generate/status endpoints.
+
+---
+
 ### 5. Remaining Work
 
-**None.** Phases 1–10 cover the product scope in this roadmap and are all shipped.
+**None.** Phases 1–11 cover the product scope in this roadmap and are all shipped.
 
 - Phase 7's heading no longer carries an in-progress marker; all Phase 7 tasks
   (multi-stage slim image, zero-config host mounts, Quick drives bar, network /
   SMB / URL sources) are implemented and verified.
-- The top-level status and phase count reflect the ten shipped phases.
+- The top-level status and phase count reflect the eleven shipped phases.
 - The target structure below matches the files that actually exist — the neutral
   360° framing viewport is implemented inside `VideoWorkspace.jsx` with its
   controls in `AiViewPanel.jsx` and the horizon card in `ControlPanel.jsx`, so no
@@ -291,7 +311,7 @@ fast-frame/
 ├── ROADMAP.md
 ├── DECISIONS.md
 ├── SUMMARY.md
-├── models/                     # Auto-downloaded YOLO11n ONNX weights (or your own)
+├── models/                     # Auto-downloaded YOLO11s + MiDaS depth ONNX weights (or your own)
 ├── backend/
 │   ├── requirements.txt
 │   ├── requirements-ai.txt     # numpy/onnxruntime for YOLO tracking (installed by default)
@@ -310,7 +330,9 @@ fast-frame/
 │   │   ├── insp_service.py     # Insta360 .insp demuxer & equirectangular/rectilinear preview metadata
 │   │   ├── ai_view_service.py  # AI framing state manager + /api/ai REST bridge
 │   │   ├── horizon_service.py  # 360° horizon roll estimation & levelling
-│   │   ├── yolo_tracking_service.py # YOLO detection, 3 strength levels, keyframe generation
+│   │   ├── yolo_tracking_service.py # YOLO11s detection, 3 strength levels, keyframe generation
+│   │   ├── point_cloud_service.py   # Monocular depth -> voxel-filtered .ply point clouds
+│   │   ├── model_cache.py      # Shared atomic ONNX weight download/cache
 │   │   ├── network_service.py  # SMB/CIFS & smbprotocol zero-copy handler
 │   │   └── worker.py           # Async background FFmpeg runner & progress parser
 │   └── tests/                  # Command builder, queue helper, network, host-mount, .insp, AI view & tracking tests
@@ -331,6 +353,7 @@ fast-frame/
             ├── Header.jsx          # GPU status bar and studio title
             ├── JobProgress.jsx     # Live render progress card
             ├── NetworkPanel.jsx    # Direct URL & Windows/NAS SMB share connection UI
+            ├── PointCloudPanel.jsx # 3D point cloud export card, sample rate, live progress
             ├── RenderQueue.jsx     # Live progress bar & Batch queue drawer
             ├── Timeline.jsx        # Multi-cut segment editor
             └── VideoWorkspace.jsx  # Preview player, neutral 360° view, YOLO box overlay, rotate/crop toolbar

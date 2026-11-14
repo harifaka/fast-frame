@@ -44,9 +44,10 @@ COPY backend/requirements.txt backend/requirements-ai.txt ./
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
-# YOLO auto-framing runtime (numpy + onnxruntime, ~80 MB). Installed by default
-# so AI tracking works out of the box; pass --build-arg INSTALL_AI_TRACKING=0
-# for the slim image without it.
+# YOLO auto-framing + monocular-depth point clouds share one runtime
+# (numpy + onnxruntime, ~80 MB). Installed by default so AI tracking and the
+# 3D exporter work out of the box; pass --build-arg INSTALL_AI_TRACKING=0 for
+# the slim image without them. PyTorch is never installed.
 ARG INSTALL_AI_TRACKING=1
 RUN if [ "$INSTALL_AI_TRACKING" = "1" ]; then \
         pip install --no-cache-dir -r requirements-ai.txt; \
@@ -55,13 +56,16 @@ RUN if [ "$INSTALL_AI_TRACKING" = "1" ]; then \
 COPY backend/ backend/
 COPY --from=frontend-build /frontend/dist frontend/dist
 
-# The detector is resolved lazily at runtime; a missing backend or model simply
-# reports "tracker unavailable" in the UI instead of breaking the API. When
-# AI_TRACKING_MODEL is empty the service downloads the YOLO11n ONNX weights
-# once into AI_TRACKING_MODEL_DIR (bind-mount it to keep the download cached).
+# The detectors are resolved lazily at runtime; a missing backend or model
+# simply reports "unavailable" in the UI instead of breaking the API. When
+# AI_TRACKING_MODEL / AI_DEPTH_MODEL are empty the services download the
+# YOLO11s detector (~36 MB) and the MiDaS v2.1 Small depth model (~64 MB) once
+# into AI_TRACKING_MODEL_DIR (bind-mount it to keep them cached).
 ENV AI_TRACKING_BACKEND=auto \
     AI_TRACKING_MODEL= \
-    AI_TRACKING_MODEL_DIR=/models
+    AI_TRACKING_MODEL_DIR=/models \
+    AI_DEPTH_MODEL= \
+    AI_DEPTH_MODEL_DIR=/models
 
 EXPOSE 8000
 VOLUME ["/mnt/host"]

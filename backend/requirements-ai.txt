@@ -1,9 +1,12 @@
-# Runtime for YOLO auto-framing (Phase 9).
+# Runtime for AI auto-framing (Phase 9) and monocular-depth point clouds
+# (Phase 11).
 #
 # Installed by default by the Dockerfile (ARG INSTALL_AI_TRACKING=1). Build with
-# --build-arg INSTALL_AI_TRACKING=0 for the slim image without AI tracking.
-# Together these two wheels add roughly 80 MB. The ONNX weights (~11 MB) are
-# downloaded once on first detection into AI_TRACKING_MODEL_DIR (/models) or a
-# temp cache — bind-mount ./models to keep them across restarts.
+# --build-arg INSTALL_AI_TRACKING=0 for the slim image without AI features.
+# Together these two wheels add roughly 80 MB and replace PyTorch entirely.
+# The ONNX weights are downloaded once on first use into AI_TRACKING_MODEL_DIR
+# (/models) or a temp cache — bind-mount ./models to keep them across restarts:
+#   yolo11s.onnx          ~36 MB  (ultralytics v8.4.0)
+#   midas-v21-small.onnx  ~64 MB  (MiDaS v2.1 Small)
 numpy==2.2.1
 onnxruntime==1.31.1

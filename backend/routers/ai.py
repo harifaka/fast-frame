@@ -21,11 +21,17 @@ from models import (
     AiTrackingAnalyzeRequest,
     AiTrackingUpdate,
     AiViewStateUpdate,
+    PointCloudGenerateRequest,
 )
 from services.ai_view_service import AiViewError, ai_view_state
 from services.ffprobe_service import ProbeError, probe_video
 from services.horizon_service import HorizonError, detect_horizon_roll
 from services.insp_service import inspect_spherical
+from services.point_cloud_service import (
+    PointCloudBusyError,
+    PointCloudError,
+    point_cloud_service,
+)
 from services.yolo_tracking_service import TrackingError, tracking_service
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
@@ -220,6 +226,71 @@ async def tracking_frame(
         )
     except TrackingError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/point-cloud/status")
+async def point_cloud_status() -> dict[str, Any]:
+    """Depth-model availability plus the current point cloud export progress."""
+
+    return point_cloud_service.status()
+
+
+@router.post("/point-cloud/generate")
+async def generate_point_cloud(payload: PointCloudGenerateRequest) -> dict[str, Any]:
+    """Sample a local clip, estimate depth and write a binary ``.ply`` cloud."""
+
+    if config.is_network_url(payload.source_path):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Point cloud generation needs a seekable local file; "
+                "mount the stream as a share or render it to a file first"
+            ),
+        )
+    source = _resolve_source(payload.source_path)
+    try:
+        metadata = await _probe_source(source)
+    except ProbeError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    output = _resolve_point_cloud_output(payload.output_path)
+    try:
+        return point_cloud_service.start(
+            source,
+            output,
+            duration=float(metadata.get("duration") or 0.0),
+            width=int(metadata.get("width") or 0),
+            height=int(metadata.get("height") or 0),
+            sample_rate=payload.sample_rate,
+            max_frames=payload.max_frames,
+            voxel_size=payload.voxel_size,
+            max_points=payload.max_points,
+            spherical=config.is_spherical_file(Path(source)),
+        )
+    except PointCloudBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except PointCloudError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _resolve_point_cloud_output(raw: str) -> str:
+    """Validate a ``.ply`` destination and force the point-cloud extension."""
+
+    text = (raw or "").strip()
+    if not text:
+        raise HTTPException(status_code=422, detail="output_path is required")
+    try:
+        target = config.resolve_host_path(text)
+    except config.PathSecurityError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    if target.suffix.lower() != ".ply":
+        target = target.with_suffix(".ply")
+    if not config.is_dir_safe(target.parent):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Output folder does not exist: {target.parent}",
+        )
+    return str(target)
 
 
 def _resolve_source(raw: str) -> str:

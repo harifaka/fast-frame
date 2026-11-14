@@ -27,6 +27,12 @@ const DEFAULT_SETTINGS = {
 
 const ACTIVE_STATUSES = new Set(['processing', 'cancelling'])
 
+function defaultPointCloudPath(sourcePath, targetDir) {
+  if (!sourcePath || !targetDir) return ''
+  const stem = (sourcePath.split(/[\\/]/).pop() || 'pointcloud').replace(/\.[^.]+$/, '')
+  return `${targetDir.replace(/[\\/]+$/, '')}/${stem}.ply`
+}
+
 export default function App() {
   const videoRef = useRef(null)
   const jobStatusRef = useRef(new Map())
@@ -62,6 +68,8 @@ export default function App() {
   const [aiAnalyzeError, setAiAnalyzeError] = useState(null)
   const [aiAutoAligning, setAiAutoAligning] = useState(false)
   const [aiAutoAlignError, setAiAutoAlignError] = useState(null)
+  const [pointCloud, setPointCloud] = useState(null)
+  const [pointCloudError, setPointCloudError] = useState(null)
   const settingsRef = useRef(settings)
 
   useEffect(() => {
@@ -212,8 +220,52 @@ export default function App() {
     [sourcePath],
   )
 
-  const loadGpu = useCallback(async (refresh = false) => {
-    setRefreshing(true)
+  const refreshPointCloud = useCallback(async () => {
+    try {
+      const status = await api.pointCloudStatus()
+      setPointCloud(status)
+      setPointCloudError(null)
+      return status
+    } catch (error) {
+      setPointCloudError(error.message)
+      return null
+    }
+  }, [])
+
+  const generatePointCloud = useCallback(
+    async ({ output_path, sample_rate } = {}) => {
+      if (!sourcePath) {
+        setPointCloudError('Select a source video before generating a point cloud.')
+        return null
+      }
+      const fallback = defaultPointCloudPath(sourcePath, targetDir)
+      const destination = (output_path || fallback || '').trim()
+      if (!destination) {
+        setPointCloudError('Choose an output folder before generating a point cloud.')
+        return null
+      }
+      setPointCloudError(null)
+      try {
+        const status = await api.generatePointCloud({
+          source_path: sourcePath,
+          output_path: destination,
+          sample_rate: Number(sample_rate) || 1,
+        })
+        setPointCloud(status)
+        setNotice({
+          type: 'success',
+          message: `Point cloud export started at ${Number(sample_rate) || 1} fps → ${status?.output || destination}`,
+        })
+        return status
+      } catch (error) {
+        setPointCloudError(error.message)
+        return null
+      }
+    },
+    [sourcePath, targetDir],
+  )
+
+  const loadGpu = useCallback(async (refresh = false) => {    setRefreshing(true)
     setGpuError(null)
     try {
       const info = await api.gpu(refresh)
@@ -239,6 +291,12 @@ export default function App() {
     const timer = window.setInterval(() => refreshAiView(), 4000)
     return () => window.clearInterval(timer)
   }, [refreshAiView])
+
+  useEffect(() => {
+    refreshPointCloud()
+    const timer = window.setInterval(() => refreshPointCloud(), 2500)
+    return () => window.clearInterval(timer)
+  }, [refreshPointCloud])
 
   useEffect(() => {
     if (targetDir) {
@@ -406,6 +464,11 @@ export default function App() {
     videoRef.current.currentTime = time
     setCurrentTime(time)
   }, [])
+
+  const defaultPointCloudOutput = useMemo(
+    () => defaultPointCloudPath(sourcePath, targetDir),
+    [sourcePath, targetDir],
+  )
 
   const submitRender = useCallback(
     async ({ renderNow = true } = {}) => {
@@ -667,6 +730,11 @@ export default function App() {
         onAutoAlign={() => runAutoAlign(sourcePath, true)}
         autoAligning={aiAutoAligning}
         autoAlignError={aiAutoAlignError}
+        pointCloud={pointCloud}
+        pointCloudError={pointCloudError}
+        pointCloudOutput={defaultPointCloudOutput}
+        onPointCloudGenerate={generatePointCloud}
+        onPointCloudRefresh={refreshPointCloud}
       />
     </div>
   )

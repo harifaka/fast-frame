@@ -28,6 +28,7 @@ from config import (
 from routers import ai, filesystem, network, queue
 from services.ai_view_service import TRACKING_MODES
 from services.gpu_service import get_gpu_info
+from services.point_cloud_service import point_cloud_service
 from services.worker import event_bus, job_manager
 from services.yolo_tracking_service import tracking_service
 
@@ -55,6 +56,11 @@ async def lifespan(app: FastAPI):
         logger.warning("Could not create network mount root %s: %s", network_root, exc)
     logger.info("Fast-Frame serving host mount %s", root)
     logger.info("Network shares (SMB/CIFS) are registered under %s", network_root)
+    # Both optional ONNX models are downloaded/loaded once in the background so
+    # the first AI action does not have to wait for a multi-megabyte download.
+    tracking_service.warm_up()
+    point_cloud_service.warm_up()
+    logger.info("YOLO tracker and monocular-depth models are warming up")
     await job_manager.start()
     logger.info("Render queue worker started")
     try:
@@ -179,6 +185,13 @@ async def system_config() -> dict:
                 "frame_endpoint": "/api/ai/tracking/frame",
                 "detector": tracking_service.status(),
             },
+        },
+        "point_cloud": {
+            "enabled": True,
+            "generate_endpoint": "/api/ai/point-cloud/generate",
+            "status_endpoint": "/api/ai/point-cloud/status",
+            "defaults": point_cloud_service.defaults(),
+            "depth_model": point_cloud_service.model_status(),
         },
         "codecs": [
             {"id": "h264", "label": "H.264 (max compatibility)"},

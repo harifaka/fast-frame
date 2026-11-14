@@ -1,5 +1,6 @@
 import {
   Activity,
+  Box,
   Crosshair,
   Loader2,
   Plus,
@@ -81,6 +82,7 @@ export default function AiViewPanel({
   error = null,
   currentTime = 0,
   endpointHint = '/api/ai/view-state',
+  onOpenPointCloud,
 }) {
   const [draft, setDraft] = useState(() => toDraft(state))
 
@@ -413,6 +415,16 @@ export default function AiViewPanel({
         >
           <Wand2 className="h-3.5 w-3.5" />
           Simulate AI
+        </button>
+        <button
+          type="button"
+          className="btn-ghost !px-2 !py-1 !text-[11px]"
+          disabled={busy || !onOpenPointCloud}
+          onClick={onOpenPointCloud}
+          title="Open the 3D point cloud (.ply) exporter"
+        >
+          <Box className="h-3.5 w-3.5" />
+          3D cloud
         </button>
         <button
           type="button"

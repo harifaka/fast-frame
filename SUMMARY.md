@@ -1,6 +1,6 @@
 # Fast-Frame — Implementation Summary
 
-All nine phases from `ROADMAP.md` are implemented, verified and committed.
+All eleven phases from `ROADMAP.md` are implemented, verified and committed.
 
 ## ▶ Run it when you're back
 
@@ -178,11 +178,34 @@ Full setup, troubleshooting and API docs: [`README.md`](README.md). Every autono
   `/models` (bind-mounted from `./models`) when `AI_TRACKING_MODEL` is empty. `docker-compose.ai.yml`
   is now only needed to pin a specific model file.
 
+### Phase 11 — YOLO11s upgrade & lightweight ONNX 3D point clouds
+- **Smarter tracker:** `yolo_tracking_service.py` now defaults to `yolo11s.onnx` (Ultralytics
+  `v8.4.0`, ~36 MB) instead of the Nano weights, with a 0.30 decode confidence floor, 0.50 NMS IoU
+  and 0.40/0.35/0.30 per-level subject floors. The Small model recovers significantly more detail at
+  the distorted edges of equirectangular frames while staying CPU-friendly.
+- **Shared model cache:** `backend/services/model_cache.py` atomically downloads both ONNX models into
+  `AI_TRACKING_MODEL_DIR` (`./models`) with a temp fallback. Startup warms the YOLO and depth models
+  in background threads, so the first AI action does not wait for a 100 MB download.
+- **Point cloud exporter:** `backend/services/point_cloud_service.py` samples frames with FFmpeg
+  (0.25–5 fps, default 1 fps, 600-frame cap), runs MiDaS v2.1 Small ONNX (`256×256` inverse depth) on
+  CPU, converts depth to pseudo-metric metres and back-projects pixels. Rectilinear clips use a 60°
+  pinhole camera; `.insp`/`.insv` use equirectangular spherical projection.
+- **Bounded memory & `.ply` output:** `PointAccumulator` voxel-filters itself at 4 M points, the final
+  cloud is voxel-filtered and capped (default 1.5 M points), and a binary little-endian PLY
+  (`x/y/z` float32 + RGB uchar) is written atomically.
+- **API:** `POST /api/ai/point-cloud/generate` (source, destination, sample rate, caps) plus
+  `GET /api/ai/point-cloud/status` with state/phase/progress/frame/point counters. Network URLs are
+  rejected, destinations are host-mount validated, and concurrent exports return HTTP 409.
+- **UI:** new `Automation → 3D Point Cloud Export (.ply)` card (`PointCloudPanel.jsx`) with an
+  editable destination, 0.25/0.5/1/2/5 fps selector (default 1 fps), frame estimate, depth-model
+  status, `Generate .ply` button and a live progress bar polling the status endpoint. `AiViewPanel`
+  gains a `3D cloud` shortcut.
+
 ---
 
 ## Verification performed
 
-- **154 backend unit tests pass** (`python -m unittest discover -s tests`): atempo math, filter-graph
+- **181 backend unit tests pass** (`python -m unittest discover -s tests`): atempo math, filter-graph
   ordering, multi-cut concat, subtitle escaping/ordering, NVENC command flags, fps-mode
   compatibility, crop pixel math (rotation-aware, even), target duration, filename sanitising,
   collision protection, network URL/SMB helpers, the host-mount rules (lexical `..` rejection,
@@ -191,7 +214,10 @@ Full setup, troubleshooting and API docs: [`README.md`](README.md). Every autono
   and the Phase 9 tracker: level profiles, subject selection, equirect/rectilinear framing math,
   smoother convergence/deadband/speed limits, keyframe compression, cache reuse, ONNX
   letterbox/NMS post-processing (skipped when numpy is absent), and the FFmpeg AI-tracking
-  expression builder incl. segment re-timing.
+  expression builder incl. segment re-timing. Phase 11 adds sampling/rate caps, percentile depth
+  mapping, rectilinear + equirectangular projection (radius = depth), voxel filtering/accumulator
+  compaction, binary PLY writer, the background export pipeline, busy/network/missing-folder guards,
+  and the YOLO11s default + threshold checks.
 - **FastAPI app imports cleanly** and exposes every route; WebSocket snapshot + progress events
   verified against a live render (percent rose 0 → 21 → 45 → 69 → 91 → 100 with FPS/speed/ETA).
 - **Real FFmpeg renders verified**:
@@ -206,6 +232,22 @@ Full setup, troubleshooting and API docs: [`README.md`](README.md). Every autono
   browser: file browsing, metadata, playback-rate sync, timeline segment creation, subtitle
   auto-detect, rotation/crop overlay dragging, queueing 3 jobs, cancel, clear finished, preset
   save/apply.
+- **Phase 11 verified with a real Docker build and container** (`docker compose up --build -d`,
+  Docker 29.9.2 / Compose v5.6.1):
+  - `npm run build` succeeds (297.7 kB JS / 39.8 kB CSS after the point-cloud card); `python -m
+    unittest discover -s tests` runs **181 tests, all OK**.
+  - Image size **1.19 GB** on disk and `import torch` is unavailable: the ONNX path adds
+    numpy/onnxruntime only, with no PyTorch or CUDA base image.
+  - Startup downloaded `yolo11s.onnx` (38,051,729 bytes) and `midas-v21-small.onnx` (66,764,249
+    bytes) into the bind-mounted `./models`. Both status endpoints reported `available: true`
+    (`onnxruntime`, `/models/yolo11s.onnx` / `/models/midas-v21-small.onnx`).
+  - End-to-end export of a synthetic 320×180 / 3 s clip at 1 fps produced 3 sampled frames,
+    **529,767 points** and a 7.9 MB binary PLY (header: `binary_little_endian`, `element vertex
+    529767`, x/y/z float + RGB uchar). At 5 fps: 15 frames and 1,241,635 points (stride cap).
+  - API guards verified: a network source returns HTTP 422, a destination without an extension is
+    normalised to `.ply`, and a second export while one is running returns HTTP 409.
+  - `GET /api/system/config` exposes the point-cloud endpoints, defaults and depth-model status;
+    `GET /api/ai/tracking/frame` served a real YOLO11s inference through the existing decoder.
 - **Focus-mode layout verified in the browser**: configuration drawer opens/closes via button,
   summary pill, backdrop and `Esc`; accordion `Collapse all` / `Expand all`; jump pills scroll to
   the right card; no horizontal overflow at 470 px / 700 px / 1070 px viewport widths; the preview

@@ -1,6 +1,7 @@
 import {
   AudioLines,
   Bookmark,
+  Box,
   Captions,
   ChevronDown,
   Cpu,
@@ -24,6 +25,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { formatBytes, formatClock, formatSpeed } from '../utils'
 import AiViewPanel from './AiViewPanel'
+import PointCloudPanel from './PointCloudPanel'
 
 const SPEED_PRESETS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3]
 const FONT_SIZES = [
@@ -71,9 +73,9 @@ const GROUPS = [
     label: 'Automation',
     icon: Sparkles,
     tone: 'text-indigo-400',
-    summary: 'Presets · AI View · Horizon',
-    tooltip: 'Saved presets, AI view selector and 360° horizon levelling',
-    sections: ['presets', 'aiview', 'spherical'],
+    summary: 'Presets · AI View · Point Cloud · Horizon',
+    tooltip: 'Saved presets, AI view selector, 3D point cloud export and 360° horizon levelling',
+    sections: ['presets', 'aiview', 'pointcloud', 'spherical'],
   },
 ]
 
@@ -195,6 +197,11 @@ export default function ControlPanel({
   onAutoAlign,
   autoAligning = false,
   autoAlignError = null,
+  pointCloud = null,
+  pointCloudError = null,
+  pointCloudOutput = '',
+  onPointCloudGenerate,
+  onPointCloudRefresh,
 }) {
   const speed = Number(settings.speed) || 1
   const encoderName =
@@ -825,6 +832,53 @@ export default function ControlPanel({
               error={aiViewError}
               currentTime={currentTime}
               endpointHint={aiViewEndpoint}
+              onOpenPointCloud={() => jumpTo('pointcloud')}
+            />
+          </ConfigSection>
+
+          <ConfigSection
+            id="pointcloud"
+            title="3D Point Cloud Export (.ply)"
+            icon={Box}
+            tone="text-cyan-400"
+            hidden={activeGroup !== 'automation'}
+            open={openSections.pointcloud}
+            onToggle={() => toggleSection('pointcloud')}
+            sectionRef={(node) => {
+              sectionRefs.current.pointcloud = node
+            }}
+            badge={
+              <span
+                className={`chip ${
+                  pointCloud?.running
+                    ? 'border-cyan-500/30 bg-cyan-500/10 text-cyan-300'
+                    : pointCloud?.state === 'completed'
+                      ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                      : pointCloud?.state === 'failed'
+                        ? 'border-red-500/30 bg-red-500/10 text-red-300'
+                        : 'border-white/10 bg-white/[0.03] text-slate-500'
+                }`}
+              >
+                {pointCloud?.running
+                  ? `${Math.round(Number(pointCloud.progress || 0) * 100)}%`
+                  : pointCloud?.state === 'completed'
+                    ? `${Number(pointCloud.points || 0).toLocaleString()} pts`
+                    : pointCloud?.state === 'failed'
+                      ? 'Failed'
+                      : pointCloud?.model?.available
+                        ? 'Depth ONNX'
+                        : 'Model loading'}
+              </span>
+            }
+          >
+            <PointCloudPanel
+              status={pointCloud}
+              error={pointCloudError}
+              defaultOutputPath={pointCloudOutput}
+              duration={Number(metadata?.duration) || 0}
+              disabled={!sourcePath || !targetDir || pointCloud?.running}
+              onGenerate={onPointCloudGenerate}
+              onRefresh={onPointCloudRefresh}
             />
           </ConfigSection>
 

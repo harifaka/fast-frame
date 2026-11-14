@@ -312,5 +312,44 @@ This file records every non-obvious architectural decision made while implementi
 64. **AI runtime is no longer opt-in.** The default image installs onnxruntime + numpy, and the
     ONNX weights download once into `AI_TRACKING_MODEL_DIR` (`/models`, bind-mounted from `./models`)
     when no path is configured. A missing download leaves the rest of the app healthy and the status
-    endpoint explains the failure, but a stock `docker compose up --build` now yields a working
+    endpoint explains the failure, but a stock `docker compose up --build -d` now yields a working
     tracker instead of the previous "ultralytics/onnxruntime not installed" dead end.
+
+## Phase 11 — YOLO11s & lightweight ONNX point clouds
+
+65. **The Small detector, not Medium/Large.** Moving from `yolo11n.onnx` to `yolo11s.onnx`
+    (Ultralytics `v8.4.0`, ~36 MB) roughly triples the parameter count while staying an easy
+    auto-download and still running comfortably on CPU. Medium/Large would push the download past
+    100 MB and slow the 180-frame analysis pass without a meaningful framing gain. The post-processor
+    also had to change: the Small model emits more low-score boxes, so the decode confidence floor
+    rose to 0.30, NMS IoU to 0.50 and the per-level subject floors to 0.40/0.35/0.30.
+66. **One shared model cache, not two downloaders.** `services/model_cache.py` performs an atomic
+    `.part` download into the first writable directory of `AI_TRACKING_MODEL_DIR` (falling back to
+    the temp dir) and is used by both the YOLO and depth services. It keeps the "download once, reuse
+    forever" behaviour of Phase 10, and the services still resolve lazily so a missing network never
+    blocks startup.
+67. **The depth model is MiDaS v2.1 Small ONNX.** It runs through the already-installed
+    `onnxruntime`, has a fixed 256×256 input, and is ~64 MB; Depth Anything V2 Small would be roughly
+    twice the download for a modest quality gain. `AI_DEPTH_MODEL`, `AI_DEPTH_MODEL_URL` and
+    `AI_DEPTH_MODEL_KIND=depth_anything` remain available for users who want a different model.
+68. **Frame sampling streams one seek at a time.** The exporter reuses `extract_frame` (FFmpeg
+    `-ss` + one RGB frame) rather than decoding the whole clip, so memory use is independent of video
+    length. The number of samples is bounded (0.25–5 fps, default cap 600), and the point buffer
+    voxel-filters itself at 4 M points. This keeps a two-hour clip exportable on a small container
+    without an OOM kill.
+69. **Inverse depth is mapped to a bounded pseudo-metric range.** A percentile stretch turns the
+    model's relative inverse depth into a 0.5–50 m closeness ramp, giving geometrically plausible
+    clouds without needing camera intrinsics or metric calibration. Rectilinear sources use a 60°
+    pinhole model; spherical containers use equirectangular projection. Absolute scale is therefore
+    approximate by design and documented as such.
+70. **Voxel filtering is numpy-only and one-point-per-cell.** Packing the three quantised axes into
+    one `int64` key and calling `np.unique` is O(n log n), needs no scipy/Open3D, and keeps the first
+    RGB triplet per cell. A stride cap runs afterwards as a hard guarantee; a pathological coordinate
+    overflow falls back to a 2-D `np.unique`.
+71. **PLY is binary little-endian and atomic.** `x/y/z` float32 plus RGB uchar keeps 1.5 M points in
+    ~22 MB, and writing to `.ply.part` then renaming means a failed export never leaves a truncated
+    file that a 3D viewer would half-load.
+72. **The export runs in a daemon thread with a polled status document.** FastAPI handlers stay
+    responsive, and the UI needs only `GET /status` every 2.5 s (no second WebSocket). A second
+    `generate` call is rejected with HTTP 409 while one job is running; the source and destination
+    are validated against the host mount first.

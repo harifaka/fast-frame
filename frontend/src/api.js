@@ -114,6 +114,12 @@ export const api = {
     headers: JSON_HEADERS,
     body: JSON.stringify(payload ?? {}),
   }),
+  pointCloudStatus: () => request('/api/ai/point-cloud/status'),
+  generatePointCloud: (payload) => request('/api/ai/point-cloud/generate', {
+    method: 'POST',
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload ?? {}),
+  }),
 }
 
 export function openProgressSocket(onEvent, onStatusChange) {

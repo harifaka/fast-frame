@@ -6,7 +6,7 @@ Fast-Frame never uploads your media. Host drives are bind-mounted into the conta
 reads the source file and writes the result directly on the host filesystem. You get NVENC
 (H.264/HEVC) rendering at 10–50× realtime without moving a single byte through the browser.
 
-All nine roadmap phases are implemented and verified. The full specification and phase
+All eleven roadmap phases are implemented and verified. The full specification and phase
 history live in [`ROADMAP.md`](ROADMAP.md); architectural trade-offs are in
 [`DECISIONS.md`](DECISIONS.md).
 
@@ -23,7 +23,8 @@ history live in [`ROADMAP.md`](ROADMAP.md); architectural trade-offs are in
 | **Auto host drives** | Every Windows drive + USB all at once via `/mnt/host/drives`, one-click Quick drives bar, no `.env` |
 | **Network / NAS / URL** | HTTP(S), RTSP, RTMP and WebDAV streams plus SMB/NAS shares as source *or* destination |
 | **Insta360 `.insp` / `.insv`** | Recognised automatically, spherical metadata, neutral 360° preview you can drag/scroll while it plays, plus automatic horizon levelling |
-| **YOLO auto-framing** | Built-in ultralight YOLO11n subject tracking (Smooth / Dynamic / Aggressive) with weights auto-downloaded on first use |
+| **YOLO auto-framing** | Built-in YOLO11s subject tracking (Smooth / Dynamic / Aggressive) with weights auto-downloaded on first use |
+| **3D point clouds** | Monocular-depth `.ply` export (MiDaS ONNX, no PyTorch) with 0.25–5 fps sampling and live progress |
 
 ---
 
@@ -380,7 +381,7 @@ How it works:
 
 1. `POST /api/ai/tracking/analyze` samples the clip (default 2 fps, max 180 frames) through
    `backend/services/yolo_tracking_service.py`. Each frame is decoded by FFmpeg as RGB24 and passed
-   to YOLO11n; people, pets and vehicles are ranked by confidence × area, with continuity from the
+   to YOLO11s; people, pets and vehicles are ranked by confidence × area, with continuity from the
    previous box so the camera does not jump between subjects. Analysis reads seekable local files
    (mounted shares included); live stream URLs are rejected with a clear message.
 2. Box centres are mapped to camera offsets — yaw/pitch on equirectangular `.insp`/`.insv` frames,
@@ -392,13 +393,15 @@ How it works:
    re-timed automatically when multi-cut keep-segments are used.
 
 The detector runtime ships **in the default image** (numpy + onnxruntime, `INSTALL_AI_TRACKING=1`
-by default). The first analysis downloads the ~11 MB YOLO11n ONNX weights into `AI_TRACKING_MODEL_DIR`
-(`/models`, bind-mounted from `./models` so a container recreate keeps them). Pin your own weights
-by mounting `./models` and setting `AI_TRACKING_MODEL`:
+by default). The first analysis downloads the ~36 MB YOLO11s ONNX weights into `AI_TRACKING_MODEL_DIR`
+(`/models`, bind-mounted from `./models` so a container recreate keeps them). Compared to the former
+Nano weights, the Small model improves confidence on the stretched edges of 360° frames; post-
+processing uses a 0.30 confidence floor, a 0.50 NMS IoU and per-level minimum confidences of
+0.40 / 0.35 / 0.30. Pin your own weights by mounting `./models` and setting `AI_TRACKING_MODEL`:
 
 ```bash
 # optional: use a specific model file (Ultralytics export, opset <= 23)
-copy yolo11n.onnx models\
+copy yolo11s.onnx models\
 docker compose -f docker-compose.yml -f docker-compose.ai.yml up -d
 ```
 
@@ -406,6 +409,44 @@ Build with `--build-arg INSTALL_AI_TRACKING=0` for the slim image without AI tra
 `GET /api/ai/tracking/status` (and `/api/system/config`) report whether a backend was found and why
 not, so the UI can show an actionable hint instead of failing silently. If the runtime is missing,
 the API still works and `Analyse clip` reports *tracker unavailable*.
+
+### 3D point cloud export (`.ply`)
+
+Phase 11 adds a depth-based 3D exporter that reuses the same `onnxruntime` install (no PyTorch, no
+OpenCV). Open **Automation → 3D Point Cloud Export (.ply)**, edit the destination if needed, choose
+a sample rate (0.25–5 fps, default **1 fps**), then press **Generate .ply**. The card polls the
+status endpoint and shows a live progress bar, analysed frames, buffered points and the final file.
+
+```bash
+# start an export (returns immediately; the work runs in a background thread)
+curl -X POST http://localhost:8000/api/ai/point-cloud/generate \
+     -H 'Content-Type: application/json' \
+     -d '{"source_path": "/mnt/host/media/clip.mp4",
+          "output_path": "/mnt/host/media/clip.ply",
+          "sample_rate": 1.0}'
+
+# poll progress: state, phase, progress, frames_processed/total, points, error
+curl http://localhost:8000/api/ai/point-cloud/status
+```
+
+How it works:
+
+1. FFmpeg decodes frames at the requested rate (default cap: 600 frames). The source must be a
+   local/seekable file; network URLs are rejected with a clear message.
+2. MiDaS v2.1 Small ONNX (~64 MB, `1×3×256×256` input) predicts an inverse-depth map on CPU. The
+   map is percentile-stretched into pseudo-metric metres (0.5–50 m).
+3. Pixels are back-projected: rectilinear clips use a pinhole camera (60° horizontal FOV), while
+   `.insp`/`.insv` sources use equirectangular spherical projection. Every point keeps its RGB.
+4. A numpy voxel-grid filter runs whenever the accumulator reaches 4 M points (bounding RAM on long
+   clips), then again on the final cloud; the result is stride-capped at 1.5 M points by default.
+5. A binary little-endian `.ply` (`x/y/z` float32 + RGB uchar) is written through an atomic `.part`
+   rename. `voxel_size` (default 0.05 m), `max_frames` and `max_points` can be overridden in the
+   request body.
+
+The depth model is downloaded at startup alongside the YOLO weights into
+`AI_TRACKING_MODEL_DIR` (`/models`, bind-mounted from `./models`). Pin your own file with
+`AI_DEPTH_MODEL=/models/<file>.onnx`; `AI_DEPTH_MODEL_KIND=depth_anything` inverts Depth Anything
+V2 outputs (depth instead of inverse depth) so they still map to closeness correctly.
 
 ---
 
@@ -465,6 +506,8 @@ Details worth knowing:
 | POST | `/api/ai/tracking/analyze` | Sample the clip, track the subject, store keyframes |
 | GET | `/api/ai/tracking/frame?path=…&time=…` | Single-frame detection for the preview overlay |
 | POST | `/api/ai/auto-align` | Detect (and optionally apply) the horizon levelling roll of a 360° source |
+| POST | `/api/ai/point-cloud/generate` | Start a monocular-depth `.ply` point cloud export (local source) |
+| GET | `/api/ai/point-cloud/status` | Depth-model availability + live export progress |
 | POST | `/api/queue/add` | Queue/render a job (`render_now: true` jumps the queue) |
 | GET | `/api/queue` | Jobs, processing id, queue depth |
 | DELETE | `/api/queue/{id}` | Cancel queued/running job or dismiss a finished one |
@@ -538,7 +581,12 @@ Environment variables:
 | `AI_TRACKING_BACKEND` | `auto` | `auto`, `ultralytics` or `onnx` |
 | `AI_TRACKING_MODEL` | — | Path to a YOLO `.onnx` (or `.pt` for ultralytics); empty auto-downloads |
 | `AI_TRACKING_MODEL_DIR` | `/models` | Cache directory for the auto-downloaded weights |
-| `AI_TRACKING_MODEL_URL` | Ultralytics YOLO11n asset | Override the weights download |
+| `AI_TRACKING_MODEL_URL` | Ultralytics YOLO11s asset | Override the YOLO weights download |
+| `AI_DEPTH_MODEL` | — | Path to a depth `.onnx`; empty auto-downloads MiDaS v2.1 Small |
+| `AI_DEPTH_MODEL_DIR` | `AI_TRACKING_MODEL_DIR` or `/models` | Cache directory for the depth model |
+| `AI_DEPTH_MODEL_URL` | MiDaS v2.1 Small asset | Override the depth weights download |
+| `AI_DEPTH_MODEL_KIND` | `midas` | `midas` (inverse depth) or `depth_anything` (depth) |
+| `AI_DEPTH_INPUT_SIZE` | `256` | Input size used when a model declares a dynamic shape |
 
 The default image already contains `onnxruntime` + numpy. If you built with
 `--build-arg INSTALL_AI_TRACKING=0`, reinstall with `pip install -r backend/requirements-ai.txt`
@@ -595,7 +643,7 @@ fast-frame/
 ├── docker-compose.yml         # GPU passthrough + automatic host drive mounts
 ├── docker-compose.cpu.yml     # CPU-only override (gpus: []) for machines without NVIDIA drivers
 ├── docker-compose.ai.yml      # Optional overlay pinning a specific ONNX model file
-├── models/                    # Auto-downloaded YOLO weights (or your own yolo11n.onnx)
+├── models/                    # Auto-downloaded YOLO11s + MiDaS ONNX weights (or your own)
 ├── .github/workflows/release.yml  # push to main -> GHCR image + v<commit-count> release
 ├── backend/
 │   ├── main.py                # FastAPI app, WebSocket, static frontend
@@ -606,7 +654,9 @@ fast-frame/
 │   └── services/
 │       ├── ai_view_service.py # AI framing state + MCP command handling
 │       ├── horizon_service.py # 360° horizon roll estimation and levelling
-│       ├── yolo_tracking_service.py # YOLO detection, 3 strength levels, keyframe generation
+│       ├── yolo_tracking_service.py # YOLO11s detection, 3 strength levels, keyframe generation
+│       ├── point_cloud_service.py # Monocular depth -> voxel-filtered .ply point clouds
+│       ├── model_cache.py     # Shared atomic ONNX weight download/cache
 │       ├── ffmpeg_builder.py  # filter_complex + NVENC command builder
 │       ├── ffprobe_service.py # metadata extraction
 │       ├── gpu_service.py     # nvidia-smi + encoder detection
@@ -620,6 +670,7 @@ fast-frame/
 │       ├── ControlPanel.jsx   # Slide-over configuration drawer with collapsible cards
 │       ├── FileBrowser.jsx    # Host drives (quick drive bar) + network/SMB/URL tabs
 │       ├── NetworkPanel.jsx   # Direct URL & SMB/NAS share connector
+│       ├── PointCloudPanel.jsx # 3D point cloud export card with live progress
 │       ├── VideoWorkspace.jsx # Preview player, neutral 360° view, YOLO box overlay, rotate/crop toolbar
 │       └── RenderQueue.jsx    # Live progress & batch queue drawer
 └── backend/tests/             # command-builder, queue helper, network, host-mount, .insp, AI view & tracking tests
