@@ -11,6 +11,7 @@ import {
   Globe,
   HardDrive,
   Info,
+  Play,
   Plus,
   RefreshCw,
   Rocket,
@@ -23,7 +24,7 @@ import {
   Zap,
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { formatBytes, formatClock, formatSpeed } from '../utils'
+import { basename, formatBytes, formatClock, formatSpeed } from '../utils'
 import AiViewPanel from './AiViewPanel'
 import PointCloudPanel from './PointCloudPanel'
 
@@ -200,12 +201,15 @@ export default function ControlPanel({
   pointCloud = null,
   pointCloudError = null,
   pointCloudOutput = '',
+  pointCloudHistory = [],
   onPointCloudGenerate,
   onPointCloudRefresh,
   onViewPointCloud,
+  onBrowsePointCloud,
   suppressEscape = false,
 }) {
   const speed = Number(settings.speed) || 1
+  const recentClouds = pointCloudHistory.slice(0, 3)
   const encoderName =
     settings.codec === 'hevc'
       ? gpu?.hevc_encoder || 'hevc_nvenc'
@@ -540,30 +544,56 @@ export default function ControlPanel({
               sectionRefs.current.source = node
             }}
             badge={
-              <button
-                type="button"
-                onClick={onBrowseSource}
-                className="text-[11px] font-medium text-accent-400 hover:text-accent-300"
-              >
-                {sourcePath ? 'Change' : 'Choose'}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={onBrowseSource}
+                  className="text-[11px] font-medium text-accent-400 hover:text-accent-300"
+                >
+                  {sourcePath ? 'Change' : 'Choose'}
+                </button>
+                <button
+                  type="button"
+                  onClick={onBrowsePointCloud}
+                  className="flex items-center gap-1 rounded-md border border-cyan-500/30 bg-cyan-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-cyan-300 transition hover:bg-cyan-500/20 hover:text-cyan-200"
+                  title="Open a .ply point cloud in the 3D fly-through viewer"
+                >
+                  <Box className="h-3 w-3" />
+                  3D
+                </button>
+              </div>
             }
           >
             <div className="p-4">
               {!metadata ? (
-                <button
-                  type="button"
-                  onClick={onBrowseSource}
-                  className="flex w-full flex-col items-center gap-2 rounded-xl border border-dashed border-white/10 bg-white/[0.01] px-4 py-8 text-center transition hover:border-accent-500/40 hover:bg-accent-500/[0.04]"
-                >
-                  <FolderOpen className="h-6 w-6 text-slate-600" />
-                  <span className="text-xs font-medium text-slate-400">
-                    Select a video from a host drive
-                  </span>
-                  <span className="text-[10px] uppercase tracking-widest text-slate-600">
-                    .mp4 · .mkv · .avi
-                  </span>
-                </button>
+                <div className="grid gap-2">
+                  <button
+                    type="button"
+                    onClick={onBrowseSource}
+                    className="flex w-full flex-col items-center gap-2 rounded-xl border border-dashed border-white/10 bg-white/[0.01] px-4 py-6 text-center transition hover:border-accent-500/40 hover:bg-accent-500/[0.04]"
+                  >
+                    <FolderOpen className="h-6 w-6 text-slate-600" />
+                    <span className="text-xs font-medium text-slate-400">
+                      Select a video from a host drive
+                    </span>
+                    <span className="text-[10px] uppercase tracking-widest text-slate-600">
+                      .mp4 · .mkv · .avi
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onBrowsePointCloud}
+                    className="flex w-full flex-col items-center gap-2 rounded-xl border border-dashed border-cyan-500/20 bg-cyan-500/[0.02] px-4 py-4 text-center transition hover:border-cyan-400/50 hover:bg-cyan-500/[0.06]"
+                  >
+                    <Box className="h-5 w-5 text-cyan-400/70" />
+                    <span className="text-xs font-medium text-slate-400">
+                      Open a 3D point cloud
+                    </span>
+                    <span className="text-[10px] uppercase tracking-widest text-slate-600">
+                      .ply · fly-through viewer
+                    </span>
+                  </button>
+                </div>
               ) : (
                 <>
                   <div className="mb-3 min-w-0">
@@ -618,6 +648,50 @@ export default function ControlPanel({
                   </div>
                 </>
               )}
+
+              <div className="mt-3 rounded-lg border border-cyan-500/20 bg-cyan-500/[0.05] px-2.5 py-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-cyan-300">
+                    <Box className="h-3 w-3" />
+                    3D point clouds
+                  </span>
+                  <button
+                    type="button"
+                    onClick={onBrowsePointCloud}
+                    className="text-[10px] font-medium text-cyan-300 hover:text-cyan-200"
+                    title="Browse host drives for a .ply file"
+                  >
+                    Open .ply…
+                  </button>
+                </div>
+                {recentClouds.length === 0 ? (
+                  <p className="mt-1 text-[10px] leading-relaxed text-slate-500">
+                    Open any exported <span className="font-mono">.ply</span> and fly through it
+                    with WASD + mouse. Nothing is uploaded.
+                  </p>
+                ) : (
+                  <ul className="mt-1.5 space-y-1">
+                    {recentClouds.map((cloud) => (
+                      <li key={cloud}>
+                        <button
+                          type="button"
+                          onClick={() => onViewPointCloud?.(cloud)}
+                          className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left transition hover:bg-white/[0.06]"
+                          title={cloud}
+                        >
+                          <Play className="h-3 w-3 shrink-0 text-cyan-300" />
+                          <span className="min-w-0 flex-1 truncate text-[11px] text-slate-300">
+                            {basename(cloud)}
+                          </span>
+                          <span className="shrink-0 text-[10px] font-medium text-cyan-300">
+                            View
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             </div>
           </ConfigSection>
 

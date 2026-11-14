@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   ArrowUp,
+  Box,
   Check,
   Clapperboard,
   FileVideo,
@@ -63,6 +64,7 @@ export default function FileBrowser({
   const [shortcuts, setShortcuts] = useState([])
 
   const isSource = mode === 'source'
+  const pointCloudMode = mode === 'point-cloud'
 
   const load = useCallback(async (path) => {
     setLoading(true)
@@ -122,6 +124,13 @@ export default function FileBrowser({
   }
 
   const confirm = () => {
+    if (pointCloudMode) {
+      if (pointCloudSelection) {
+        onViewPointCloud?.(pointCloudSelection.path)
+        onClose()
+      }
+      return
+    }
     if (isSource) {
       if (selected && selected.kind === 'video') onSelect(selected.path)
       return
@@ -141,7 +150,9 @@ export default function FileBrowser({
     selected && !selected.is_dir && isPointCloudPath(selected.path) ? selected : null
 
   const viewSelectedPointCloud = () => {
-    if (pointCloudSelection) onViewPointCloud?.(pointCloudSelection.path)
+    if (!pointCloudSelection) return
+    onViewPointCloud?.(pointCloudSelection.path)
+    if (pointCloudMode) onClose()
   }
 
   return (
@@ -154,17 +165,35 @@ export default function FileBrowser({
       <div className="flex h-[76vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-white/10 bg-studio-900 shadow-2xl">
         <div className="flex items-center justify-between gap-3 border-b border-white/5 px-5 py-3">
           <div className="flex items-center gap-2.5">
-            <div className="grid h-8 w-8 place-items-center rounded-lg bg-accent-500/10 text-accent-400">
-              {isSource ? <FileVideo className="h-4 w-4" /> : <FolderOpen className="h-4 w-4" />}
+            <div
+              className={`grid h-8 w-8 place-items-center rounded-lg ${
+                pointCloudMode
+                  ? 'bg-cyan-500/10 text-cyan-300'
+                  : 'bg-accent-500/10 text-accent-400'
+              }`}
+            >
+              {pointCloudMode ? (
+                <Box className="h-4 w-4" />
+              ) : isSource ? (
+                <FileVideo className="h-4 w-4" />
+              ) : (
+                <FolderOpen className="h-4 w-4" />
+              )}
             </div>
             <div>
               <h2 className="text-sm font-semibold text-white">
-                {isSource ? 'Select source video' : 'Select target directory'}
+                {pointCloudMode
+                  ? 'Open a 3D point cloud'
+                  : isSource
+                    ? 'Select source video'
+                    : 'Select target directory'}
               </h2>
               <p className="text-[11px] text-slate-500">
-                {isSource
-                  ? 'Browse host drives or load a network stream. Nothing is uploaded.'
-                  : 'Rendered files are written directly into this folder.'}
+                {pointCloudMode
+                  ? 'Pick any .ply file on a host drive and fly through it. Nothing is uploaded.'
+                  : isSource
+                    ? 'Browse host drives or load a network stream. Nothing is uploaded.'
+                    : 'Rendered files are written directly into this folder.'}
               </p>
             </div>
           </div>
@@ -173,22 +202,24 @@ export default function FileBrowser({
           </button>
         </div>
 
-        <div className="flex items-end gap-1 border-b border-white/5 bg-studio-950/60 px-4 pt-2">
-          <TabButton
-            active={tab === 'host'}
-            onClick={() => setTab('host')}
-            icon={HardDrive}
-            label="📁 Host Drives"
-          />
-          <TabButton
-            active={tab === 'network'}
-            onClick={() => setTab('network')}
-            icon={Globe}
-            label="🌐 Network / NAS / URL"
-          />
-        </div>
+        {!pointCloudMode && (
+          <div className="flex items-end gap-1 border-b border-white/5 bg-studio-950/60 px-4 pt-2">
+            <TabButton
+              active={tab === 'host'}
+              onClick={() => setTab('host')}
+              icon={HardDrive}
+              label="📁 Host Drives"
+            />
+            <TabButton
+              active={tab === 'network'}
+              onClick={() => setTab('network')}
+              icon={Globe}
+              label="🌐 Network / NAS / URL"
+            />
+          </div>
+        )}
 
-        {tab === 'network' ? (
+        {!pointCloudMode && tab === 'network' ? (
           <NetworkPanel mode={mode} onSelect={onSelect} videoExtensions={videoExtensions} />
         ) : (
           <>
@@ -264,12 +295,16 @@ export default function FileBrowser({
                 <FileEntryList
                   entries={entries}
                   isSource={isSource}
+                  pointCloudOnly={pointCloudMode}
                   selectedPath={selected?.path}
                   onPick={setSelected}
                   onOpen={(entry) => {
                     if (entry.is_dir) enterDirectory(entry)
                     else if (isSource && entry.kind === 'video') onSelect(entry.path)
-                    else if (isPointCloudPath(entry.path)) onViewPointCloud?.(entry.path)
+                    else if (isPointCloudPath(entry.path)) {
+                      onViewPointCloud?.(entry.path)
+                      if (pointCloudMode) onClose()
+                    }
                   }}
                   videoExtensions={videoExtensions}
                   emptyLabel={loading ? 'Loading…' : 'This folder is empty.'}
@@ -285,21 +320,25 @@ export default function FileBrowser({
 
             <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/5 bg-studio-950/40 px-4 py-3">
               <div className="min-w-0 text-[11px] text-slate-600">
-                {pointCloudSelection
-                  ? `${pointCloudSelection.name} · 3D point cloud — open the fly-through viewer`
-                  : isSource
-                    ? activeSelection
-                      ? `Selected: ${activeSelection.name}`
-                      : 'Select a video file to continue'
-                    : `Destination: ${activeSelection?.path || currentPath || '—'}`}
-                {isSource && subtitleExtensions?.length ? (
+                {pointCloudMode
+                  ? pointCloudSelection
+                    ? `${pointCloudSelection.name} · ready to fly through`
+                    : 'Select a .ply point cloud to open the 3D viewer'
+                  : pointCloudSelection
+                    ? `${pointCloudSelection.name} · 3D point cloud — open the fly-through viewer`
+                    : isSource
+                      ? activeSelection
+                        ? `Selected: ${activeSelection.name}`
+                        : 'Select a video file to continue'
+                      : `Destination: ${activeSelection?.path || currentPath || '—'}`}
+                {!pointCloudMode && isSource && subtitleExtensions?.length ? (
                   <span className="ml-2 text-slate-700">
                     ({subtitleExtensions.join(', ')} files are detected automatically)
                   </span>
                 ) : null}
               </div>
               <div className="flex items-center gap-2">
-                {pointCloudSelection && !isSource && onViewPointCloud ? (
+                {pointCloudSelection && !isSource && !pointCloudMode && onViewPointCloud ? (
                   <button type="button" onClick={viewSelectedPointCloud} className="btn-ghost">
                     🎮 View 3D
                   </button>
@@ -307,7 +346,16 @@ export default function FileBrowser({
                 <button type="button" onClick={onClose} className="btn-ghost">
                   Cancel
                 </button>
-                {isSource && pointCloudSelection && onViewPointCloud ? (
+                {pointCloudMode ? (
+                  <button
+                    type="button"
+                    onClick={viewSelectedPointCloud}
+                    disabled={!pointCloudSelection}
+                    className="btn-primary"
+                  >
+                    🎮 View 3D
+                  </button>
+                ) : isSource && pointCloudSelection && onViewPointCloud ? (
                   <button type="button" onClick={viewSelectedPointCloud} className="btn-primary">
                     🎮 View 3D
                   </button>

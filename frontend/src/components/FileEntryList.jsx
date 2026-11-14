@@ -14,6 +14,7 @@ function isPointCloudEntry(entry) {
 export default function FileEntryList({
   entries,
   isSource,
+  pointCloudOnly = false,
   selectedPath,
   onPick,
   onOpen,
@@ -52,7 +53,8 @@ export default function FileEntryList({
         const isSelected = selectedPath === entry.path
         const isVideo = entry.kind === 'video'
         const pointCloudEntry = isPointCloudEntry(entry)
-        const disabled = !entry.is_dir && !isSource && !pointCloudEntry
+        const entryAllowed = pointCloudOnly ? pointCloudEntry : isSource || pointCloudEntry
+        const disabled = !entry.is_dir && !entryAllowed
         return (
           <button
             key={entry.path}
@@ -61,7 +63,8 @@ export default function FileEntryList({
             onClick={() => onPick?.(entry)}
             onDoubleClick={() => {
               if (entry.is_dir) onOpen?.(entry)
-              else if ((isVideo && isSource) || pointCloudEntry) onOpen?.(entry)
+              else if (pointCloudEntry) onOpen?.(entry)
+              else if (isVideo && isSource) onOpen?.(entry)
             }}
             className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition ${
               isSelected

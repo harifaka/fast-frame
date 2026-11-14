@@ -388,3 +388,15 @@ This file records every non-obvious architectural decision made while implementi
     action becomes **🎮 View 3D** for a `.ply` selection, but `onSelect` is not called, so the
     current video source survives; `Esc` is ignored by the file browser and the configuration drawer
     while the overlay is open so closing the viewer does not also close the modal behind it.
+80. **3D input reuses the file-browser modal instead of adding a second picker.** A `point-cloud`
+    browser mode swaps the header, hides the network tab and disables every non-`.ply` row, so the
+    same `FileBrowser`/`FileEntryList` code (breadcrumbs, quick drives, truncation, error states)
+    serves video selection, destination picking and cloud picking. Picking a cloud in this mode
+    closes the browser because the viewer is full-screen anyway; source/destination flows keep the
+    browser open as before.
+81. **Recent clouds are a LocalStorage list, not a backend registry.** The exporter keeps a single
+    status document, so a server-side history would need new persistence for one convenience. The
+    last five paths (exported *and* opened, deduped, most recent first) are stored under
+    `fastframe.pointCloudHistory`, which is enough to replay a previous `.ply` across reloads and
+    also seeds the point-cloud browser's start folder. Writes are wrapped in `try/catch` so private
+    mode or a full quota never breaks the viewer.

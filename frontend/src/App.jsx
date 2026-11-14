@@ -30,6 +30,29 @@ const DEFAULT_SETTINGS = {
 
 const ACTIVE_STATUSES = new Set(['processing', 'cancelling'])
 
+const POINT_CLOUD_HISTORY_KEY = 'fastframe.pointCloudHistory'
+const MAX_POINT_CLOUD_HISTORY = 5
+
+function readPointCloudHistory() {
+  try {
+    const raw = window.localStorage.getItem(POINT_CLOUD_HISTORY_KEY)
+    const parsed = raw ? JSON.parse(raw) : []
+    return Array.isArray(parsed)
+      ? parsed.filter((item) => typeof item === 'string' && item.trim())
+      : []
+  } catch {
+    return []
+  }
+}
+
+function persistPointCloudHistory(entries) {
+  try {
+    window.localStorage.setItem(POINT_CLOUD_HISTORY_KEY, JSON.stringify(entries))
+  } catch {
+    /* storage disabled or full - the in-memory list still works */
+  }
+}
+
 function defaultPointCloudPath(sourcePath, targetDir) {
   if (!sourcePath || !targetDir) return ''
   const stem = (sourcePath.split(/[\\/]/).pop() || 'pointcloud').replace(/\.[^.]+$/, '')
@@ -74,6 +97,7 @@ export default function App() {
   const [pointCloud, setPointCloud] = useState(null)
   const [pointCloudError, setPointCloudError] = useState(null)
   const [pointCloudView, setPointCloudView] = useState(null)
+  const [pointCloudHistory, setPointCloudHistory] = useState(readPointCloudHistory)
   const settingsRef = useRef(settings)
 
   useEffect(() => {
@@ -88,9 +112,29 @@ export default function App() {
 
   const closeConfig = useCallback(() => setConfigOpen(false), [])
 
-  const openPointCloudViewer = useCallback((path) => {
-    if (path) setPointCloudView(path)
+  const rememberPointCloud = useCallback((path) => {
+    const target = (path || '').trim()
+    if (!target) return
+    setPointCloudHistory((previous) => {
+      if (previous[0] === target) return previous
+      const next = [target, ...previous.filter((item) => item !== target)].slice(
+        0,
+        MAX_POINT_CLOUD_HISTORY,
+      )
+      persistPointCloudHistory(next)
+      return next
+    })
   }, [])
+
+  const openPointCloudViewer = useCallback(
+    (path) => {
+      const target = (path || '').trim()
+      if (!target) return
+      setPointCloudView(target)
+      rememberPointCloud(target)
+    },
+    [rememberPointCloud],
+  )
 
   const closePointCloudViewer = useCallback(() => setPointCloudView(null), [])
 
@@ -307,6 +351,12 @@ export default function App() {
     const timer = window.setInterval(() => refreshPointCloud(), 2500)
     return () => window.clearInterval(timer)
   }, [refreshPointCloud])
+
+  useEffect(() => {
+    if (pointCloud?.state === 'completed' && pointCloud.output) {
+      rememberPointCloud(pointCloud.output)
+    }
+  }, [pointCloud?.state, pointCloud?.output, rememberPointCloud])
 
   useEffect(() => {
     if (targetDir) {
@@ -587,7 +637,11 @@ export default function App() {
       ? sourcePath && !isNetworkUrl(sourcePath)
         ? dirname(sourcePath)
         : appConfig?.host_root
-      : targetDir || appConfig?.host_root
+      : browser?.mode === 'point-cloud'
+        ? dirname(pointCloudHistory[0] || pointCloud?.output || '') ||
+          targetDir ||
+          appConfig?.host_root
+        : targetDir || appConfig?.host_root
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -718,6 +772,10 @@ export default function App() {
           setConfigOpen(false)
           setBrowser({ mode: 'source' })
         }}
+        onBrowsePointCloud={() => {
+          setConfigOpen(false)
+          setBrowser({ mode: 'point-cloud' })
+        }}
         onBrowseTarget={() => setBrowser({ mode: 'target' })}
         settings={settings}
         onChange={updateSettings}
@@ -748,6 +806,7 @@ export default function App() {
         onPointCloudGenerate={generatePointCloud}
         onPointCloudRefresh={refreshPointCloud}
         onViewPointCloud={openPointCloudViewer}
+        pointCloudHistory={pointCloudHistory}
         suppressEscape={Boolean(pointCloudView)}
       />
 

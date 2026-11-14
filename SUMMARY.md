@@ -223,6 +223,14 @@ Full setup, troubleshooting and API docs: [`README.md`](README.md). Every autono
   *Use this folder* in destination mode). `.ply` rows get a 3D icon/badge and are clickable in both
   modes; double-click opens the viewer. `App.jsx` owns one `pointCloudView` state, and the drawer and
   browser ignore `Esc` while the overlay is open.
+- **3D from the Input card:** `Configuration → Input → Source` has a dedicated **`3D`** badge button,
+  an *Open a 3D point cloud* tile and an **Open .ply…** action. All three open the host browser in a
+  `point-cloud` mode (only `.ply` rows selectable, network tab hidden, picking a cloud closes the
+  browser and mounts the viewer).
+- **Replay previous clouds:** exported and opened paths are kept in LocalStorage
+  (`fastframe.pointCloudHistory`, deduped, last 5) and listed under **3D point clouds** in the same
+  card, so a previous `.ply` reopens with one click and survives reloads. The list also seeds the
+  point-cloud browser's start folder.
 
 ---
 
@@ -273,6 +281,11 @@ Full setup, troubleshooting and API docs: [`README.md`](README.md). Every autono
     **🎮 View 3D** → the WebGL overlay reported **30,000 pts** and rendered the cloud with vertex
     colours. Holding `W` moved the camera forward and moving the mouse yawed the view (FlyControls
     verified live), and `Esc` closed the overlay while the file browser stayed open.
+  - Input-card flow verified in the browser: `Configuration → Input → Source` shows the **`3D`**
+    badge, the *Open a 3D point cloud* tile and the **3D point clouds** block. Opening it lists the
+    folder with `clip.mp4` disabled and `demo-cloud.ply` selectable, **🎮 View 3D** mounts the viewer
+    (15,000 pts) and closes the browser, and `Esc` closes only the viewer. Reopening the drawer shows
+    `demo-cloud.ply · View` under the recents, which replays the cloud in one click.
 - **Phase 11 verified with a real Docker build and container** (`docker compose up --build -d`,
   Docker 29.9.2 / Compose v5.6.1):
   - `npm run build` succeeds (297.7 kB JS / 39.8 kB CSS after the point-cloud card); `python -m
@@ -351,6 +364,9 @@ Full setup, troubleshooting and API docs: [`README.md`](README.md). Every autono
 - Camera distance, near/far, flight speed and default point size come from the cloud's bounding box,
   because exported clouds have no metric scale; the parsed geometry is never mutated (the `points`
   object is offset instead) so reopening a file is cheap.
+- 3D file picking reuses the existing file-browser modal in a `point-cloud` mode (`.ply` only,
+  network tab hidden) instead of adding a second picker, and the last five exported/opened clouds
+  are remembered in LocalStorage rather than in a new backend registry.
 - The image keeps Debian's `ffmpeg` package (and its large GL/Vulkan dependency set) instead of a
   third-party static build, because that combination was verified to expose `h264_nvenc`/
   `hevc_nvenc` through driver injection on the test machine.

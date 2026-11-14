@@ -456,6 +456,19 @@ Every finished export — and every `.ply` you click in the file browser — off
 fetched from `GET /api/fs/file` and parsed in the browser by `PLYLoader`, so nothing is uploaded or
 copied and the file never leaves the host mount.
 
+There are four ways to open a cloud:
+
+1. **Export card** — `Automation → 3D Point Cloud Export (.ply)` shows **🎮 View 3D** as soon as a
+   generation finishes.
+2. **`Configuration → Input → Source`** — the **`3D`** badge button next to `Choose` (or the
+   *Open a 3D point cloud* tile when no video is selected) opens the host browser already filtered
+   to `.ply` files.
+3. **Recent list** — the same Source card keeps the last five clouds under **3D point clouds**
+   (exported or opened), so a previous `.ply` replays with one click. The list lives in
+   LocalStorage and survives reloads.
+4. **File browser** — clicking any `.ply` (in source or destination mode) turns the primary action
+   into **🎮 View 3D**.
+
 | Input | Action |
 | --- | --- |
 | `W` / `S` | Fly forward / backward |
