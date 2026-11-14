@@ -54,12 +54,13 @@ clone of this repository the shorter form is `docker compose pull && docker comp
 | --- | --- |
 | Container images (`latest`, `lite`, `pro`, `1-standard`, …) | https://github.com/harifaka/fast-frame/pkgs/container/fast-frame |
 | Releases (`v1`, `v2`, … with notes) | https://github.com/harifaka/fast-frame/releases |
-| Pipeline | [`.github/workflows/release.yml`](.github/workflows/release.yml) |
+| Pipelines | [`.github/workflows/release.yml`](.github/workflows/release.yml) (build + publish), [`.github/workflows/cleanup-packages.yml`](.github/workflows/cleanup-packages.yml) (GHCR retention) |
 
 Each edition is tagged `<count>-<edition>` (e.g. `16-lite`, `16-standard`, `16-pro`) plus its
 moving alias, and every build also gets a matching `v<count>` GitHub Release — pin one of those for
 reproducible deployments instead of an alias. See
-[Editions: Lite, Standard, Pro](#editions-lite-standard-pro) for the differences.
+[Editions: Lite, Standard, Pro](#editions-lite-standard-pro) for the differences. Only the newest
+build is kept in GHCR — see [Image retention (GHCR)](#image-retention-ghcr).
 
 ---
 
@@ -774,6 +775,73 @@ older still-running build as soon as a newer commit lands on `main`, so only the
 publishes. Merges to `main` therefore need `contents: write` and `packages: write` — already set in
 the workflow.
 
+### Image retention (GHCR)
+
+Every Release run adds three package versions (one per edition) to the single package `fast-frame`.
+Left alone that is hundreds of megabytes (Lite/Standard) up to several gigabytes (Pro) of layers per
+push that is never pulled again — and private container packages count against the account's
+Packages storage.
+
+[`.github/workflows/cleanup-packages.yml`](.github/workflows/cleanup-packages.yml) keeps the package
+at exactly one build:
+
+1. **Triggers:** `workflow_run` after a **successful** `Release`, a weekly `schedule`
+   (Mon 03:17 UTC) as a safety net, and manual `workflow_dispatch` with a `keep-versions` input
+   (default `3`).
+2. **Permissions:** `contents: read` and `packages: write`. `packages: write` is the only scope
+   `actions/delete-package-versions@v5` needs — it grants both the read and delete operations on a
+   package published by this repository. No PAT is required.
+3. **Untagged sweep:** `delete-only-untagged-versions: true`, `min-versions-to-keep: 0` removes
+   dangling manifests, which is what a cancelled run (the `concurrency` group above) leaves behind.
+   It runs first so those stale manifests cannot occupy a retention slot.
+4. **Retention:** `min-versions-to-keep: 3` deletes every version older than the newest three.
+
+Three rather than one, because all editions share the package: the newest three versions *are* that
+build's `lite`, `latest` and `pro` digests. Keeping fewer would delete a manifest that an alias tag
+still points at and break `docker pull …:lite` / `…:pro`, so the workflow clamps the input to 3.
+The action deletes at most 100 versions per run, which is plenty for a truncating policy.
+
+Older GitHub Releases stay published, but their pinned `<count>-<edition>` image tags are deleted
+with the version, so `FAST_FRAME_TAG=23` only works until the next build replaces build 23.
+
+> If the repository ever moves to an organisation, `actions/delete-package-versions` needs a PAT
+> (`owner:` + `token:` inputs), because it calls the user-owned package endpoints.
+
+### Purging old versions by hand
+
+**GitHub UI:** open your profile → **Packages** → **fast-frame** → **Package settings** →
+**Manage versions**, then delete the stale rows (three rows per release, plus any `untagged` ones).
+
+**`gh` CLI** — grant the package scopes once:
+
+```bash
+gh auth refresh -h github.com -s read:packages,delete:packages
+```
+
+```bash
+# 1) list: version id, creation date, tags
+gh api "/users/harifaka/packages/container/fast-frame/versions?per_page=100" \
+  --jq '.[] | "\(.id)  \(.created_at)  \((.metadata.container.tags // []) | join(","))"'
+
+# 2) delete everything except the newest 3 versions (= the latest build)
+gh api "/users/harifaka/packages/container/fast-frame/versions?per_page=100" \
+  --jq '.[3:][] | .id' |
+  while read -r id; do
+    gh api -X DELETE "/users/harifaka/packages/container/fast-frame/versions/$id"
+  done
+```
+
+PowerShell equivalent of the second command:
+
+```powershell
+gh api "/users/harifaka/packages/container/fast-frame/versions?per_page=100" `
+  --jq '.[3:][] | .id' |
+  ForEach-Object { gh api -X DELETE "/users/harifaka/packages/container/fast-frame/versions/$_" }
+```
+
+Both read a single page (100 versions). If the package ever grows past that, iterate
+`?page=1..n` or delete the ids listed by the first command explicitly.
+
 ---
 
 ## 9. Troubleshooting
@@ -804,6 +872,7 @@ fast-frame/
 ├── docker-compose.pro.yml     # Pro overlay: onnxruntime-gpu + YOLO11m / Depth Anything V2 Base
 ├── models/                    # Auto-downloaded YOLO11s + MiDaS ONNX weights (or your own)
 ├── .github/workflows/release.yml  # push to main -> lite/standard/pro GHCR images + v<count> release
+├── .github/workflows/cleanup-packages.yml # post-release prune: 1 build of images kept in GHCR
 ├── backend/
 │   ├── main.py                # FastAPI app, WebSocket, static frontend
 │   ├── config.py              # Mount root, drive shortcuts, path-traversal defence
