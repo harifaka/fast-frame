@@ -31,9 +31,9 @@ history live in [`ROADMAP.md`](ROADMAP.md); architectural trade-offs are in
 
 ## 📌 Quick start — run the released image (no build)
 
-**Pinned fast path.** Every push to `main` builds and publishes the image to GitHub Container
-Registry, so the fastest way to run Fast-Frame is the pre-built `latest` image — no Node, no
-`npm ci`, no local build:
+**Pinned fast path.** Every push to `main` builds and publishes **three editions** to GitHub
+Container Registry (`lite`, `latest` = standard, `pro`), so the fastest way to run Fast-Frame is a
+pre-built image — no Node, no `npm ci`, no local build:
 
 ```bash
 docker pull ghcr.io/harifaka/fast-frame:latest
@@ -52,13 +52,14 @@ clone of this repository the shorter form is `docker compose pull && docker comp
 
 | Where | Link |
 | --- | --- |
-| Container images (`latest`, `1`, `2`, …) | https://github.com/harifaka/fast-frame/pkgs/container/fast-frame |
+| Container images (`latest`, `lite`, `pro`, `1-standard`, …) | https://github.com/harifaka/fast-frame/pkgs/container/fast-frame |
 | Releases (`v1`, `v2`, … with notes) | https://github.com/harifaka/fast-frame/releases |
 | Pipeline | [`.github/workflows/release.yml`](.github/workflows/release.yml) |
 
-Image tags are the sequential commit count on `main` (`1`, `2`, `16`, …), and each build also gets
-a matching `v<count>` GitHub Release — pin one of those for reproducible deployments instead of
-`latest`.
+Each edition is tagged `<count>-<edition>` (e.g. `16-lite`, `16-standard`, `16-pro`) plus its
+moving alias, and every build also gets a matching `v<count>` GitHub Release — pin one of those for
+reproducible deployments instead of an alias. See
+[Editions: Lite, Standard, Pro](#editions-lite-standard-pro) for the differences.
 
 ---
 
@@ -132,8 +133,8 @@ docker compose pull && docker compose up -d
 docker compose up --build -d
 ```
 
-For the GPU-accelerated heavyweight AI edition see
-[Pro edition](#pro-edition-gpu-accelerated-heavyweight-ai).
+For the three delivery editions (Lite, Standard, Pro) see
+[Editions: Lite, Standard, Pro](#editions-lite-standard-pro).
 
 Open **http://localhost:8000**. From another device on your LAN use
 **`http://<windows-host-ip>:8000`** — the port is published on `0.0.0.0` and Windows Defender
@@ -222,9 +223,55 @@ the container starts on machines without an NVIDIA driver. Renders use `libx264`
 `/api/system/gpu-check` reports `status: "fallback"` with the reason. Use this file as the base
 compose file (e.g. rename it or pass both `-f` flags) whenever you run without a GPU.
 
-### Pro edition (GPU-accelerated heavyweight AI)
+### Editions: Lite, Standard, Pro
 
-The default image runs both ONNX models on the CPU. The Pro overlay installs the CUDA build of the
+Every push to `main` publishes three separate images, each with its own AI stack and UI:
+
+| Edition | Image tags | AI runtime | Models | Interface |
+| --- | --- | --- | --- | --- |
+| **Lite** | `lite`, `<count>-lite` | none — no `numpy`, no `onnxruntime` | — | Reduced |
+| **Standard** (default) | `latest`, `<count>-standard` | `onnxruntime` (CPU) | YOLO11s, ~36 MB + MiDaS v2.1 Small, ~64 MB | Full |
+| **Pro** | `pro`, `<count>-pro` | `onnxruntime-gpu[cuda,cudnn]` + `nvidia-cublas` | YOLO11m, ~81 MB + Depth Anything V2 Base, ~389 MB | Full |
+
+Pull the one you want:
+
+```bash
+docker pull ghcr.io/harifaka/fast-frame:lite       # smallest, no AI runtime
+docker pull ghcr.io/harifaka/fast-frame:latest     # Standard, CPU AI (default)
+docker pull ghcr.io/harifaka/fast-frame:pro        # Pro, GPU AI
+```
+
+Or start the matching Compose stack from a clone:
+
+| Edition | Command |
+| --- | --- |
+| Lite | `docker compose -f docker-compose.yml -f docker-compose.lite.yml up -d` |
+| Standard | `docker compose up -d` |
+| Pro | `docker compose -f docker-compose.yml -f docker-compose.pro.yml up -d` |
+
+Add `--build` to any of them to compile locally. Pin a build with `FAST_FRAME_LITE_TAG`,
+`FAST_FRAME_TAG` or `FAST_FRAME_PRO_TAG` (e.g. `FAST_FRAME_PRO_TAG=16-pro`).
+
+#### What the Lite edition hides
+
+The Lite image builds with `--build-arg INSTALL_AI_TRACKING=0` (no `requirements-ai.txt`, no model
+download) and sets `APP_EDITION=lite`. `GET /api/system/config` reports `"edition": "lite"` and the
+React UI switches to a reductive layout:
+
+- **Hidden:** the entire **AI VIEW** selector (YOLO auto-framing), the **3D Point Cloud
+  Export (.ply)** card and viewer entry points, the **360° Horizon** auto-align card, and every AI
+  badge/toggle in the preview bar (`AI view`, `Track boxes`, `AI …`).
+- **Kept:** native 360° `.insp`/`.insv` preview with drag-to-look and scroll-to-zoom, the speed
+  slider/buttons, the multi-cut timeline, basic output encoding (H.264/H.265), and crop plus
+  rotate/flip.
+- AI-only endpoints (`/api/ai/tracking/*`, `/api/ai/point-cloud/*`, `/api/ai/auto-align`) answer
+  **503** instead of failing on a missing import. The `/api/ai/view-state` routes stay available
+  because the 360° preview still persists pan/tilt/zoom there, and no model warm-up runs at
+  startup.
+
+#### Pro details
+
+The Standard image runs both ONNX models on the CPU. The Pro overlay installs the CUDA build of the
 ONNX runtime and swaps in heavier weights, so framing and depth inference run on your NVIDIA GPU:
 
 ```bash
@@ -234,17 +281,17 @@ docker compose -f docker-compose.yml -f docker-compose.pro.yml up --build -d
 Everything else — host mounts, ports, `gpus: all` and the injected NVENC driver — is inherited from
 `docker-compose.yml`; the overlay only changes the build and the AI configuration:
 
-| | Lite (default) | Pro (`-f docker-compose.pro.yml`) |
+| | Standard (`latest`) | Pro (`-f docker-compose.pro.yml`) |
 | --- | --- | --- |
 | AI runtime | `onnxruntime` (CPU) | `onnxruntime-gpu[cuda,cudnn]` + `nvidia-cublas` |
 | Tracking model | YOLO11s, ~36 MB | YOLO11m, ~81 MB |
 | Depth model | MiDaS v2.1 Small, ~64 MB | Depth Anything V2 Base, ~389 MB |
 | Execution provider | `CPUExecutionProvider` | `CUDAExecutionProvider` (CPU fallback) |
-| Image tag | `…:latest` | `…:latest-pro` |
+| Image tag | `…:latest` / `…:16-standard` | `…:pro` / `…:16-pro` |
 
 The first start downloads the two heavier models (~470 MB in total) into `./models`, next to any
-Lite files. Cache filenames are derived from the download URL — `yolo11m.onnx`,
-`depth-anything-v2-base-model.onnx` — so both editions can share the same bind mount without
+Standard files. Cache filenames are derived from the download URL — `yolo11m.onnx`,
+`depth-anything-v2-base-model.onnx` — so all editions can share the same bind mount without
 overwriting each other.
 
 Check which device and weight set a model bound to in the container log:
@@ -255,14 +302,15 @@ docker compose -f docker-compose.yml -f docker-compose.pro.yml logs fast-frame |
 # AI monocular depth ready | edition=pro | weights=Pro | device=CUDA | provider=CUDAExecutionProvider | model=depth-anything-v2-base-model.onnx | input=518x518
 ```
 
-`/api/system/config` reports `edition`, and the tracking / point-cloud status endpoints include
-`provider` and `weights`, so the UI or a script can confirm the GPU is actually in use.
+`/api/system/config` reports `edition` and `ai_enabled`, and the tracking / point-cloud status
+endpoints include `provider` and `weights`, so the UI or a script can confirm the GPU is actually in
+use.
 
 Notes:
 
 - The CUDA 13 / cuDNN 9 libraries come from PyPI wheels (`~2 GB`), the driver still comes from the
   NVIDIA Container Toolkit — no CUDA base image is used. A driver new enough for CUDA 13 (R580+) is
-  required, and the Pro image is several GB larger than the Lite one.
+  required, and the Pro image is several GB larger than the Standard one.
 - If the CUDA provider cannot load, onnxruntime falls back to `CPUExecutionProvider`, logs a warning
   (`… fell back to the CPU provider …`) and the app keeps working, just slower.
 - Prefer the 1.3 GB Depth Anything V2 Large? Replace `base` with `large` in `AI_DEPTH_MODEL_URL`;
@@ -442,8 +490,9 @@ How it works:
    render only evaluates `crop` math per frame — no inference runs during encoding. Keyframes are
    re-timed automatically when multi-cut keep-segments are used.
 
-The detector runtime ships **in the default image** (numpy + onnxruntime, `INSTALL_AI_TRACKING=1`
-by default). The first analysis downloads the ~36 MB YOLO11s ONNX weights into `AI_TRACKING_MODEL_DIR`
+The detector runtime ships **in the Standard and Pro images** (numpy + onnxruntime,
+`INSTALL_AI_TRACKING=1` by default; the Lite image omits it). The first analysis downloads the
+~36 MB YOLO11s ONNX weights into `AI_TRACKING_MODEL_DIR`
 (`/models`, bind-mounted from `./models` so a container recreate keeps them). Compared to the former
 Nano weights, the Small model improves confidence on the stretched edges of 360° frames; post-
 processing uses a 0.30 confidence floor, a 0.50 NMS IoU and per-level minimum confidences of
@@ -674,7 +723,7 @@ Environment variables:
 | `HOST_MOUNT_PATH` | `/mnt/host` | Root of the zero-copy file browser |
 | `FFMPEG_BIN` | `ffmpeg` | FFmpeg executable (full path allowed) |
 | `FFPROBE_BIN` | `ffprobe` | ffprobe executable |
-| `APP_EDITION` | `community` | `community` (Lite weights) or `pro` (GPU/heavyweight; set by `docker-compose.pro.yml`) |
+| `APP_EDITION` | `standard` | `lite` (no AI runtime, reduced UI), `standard` (CPU AI, default) or `pro` (GPU AI; set by `docker-compose.pro.yml`) |
 | `AI_TRACKING_BACKEND` | `auto` | `auto`, `ultralytics` or `onnx` |
 | `AI_TRACKING_MODEL` | — | Path to a YOLO `.onnx` (or `.pt` for ultralytics); empty auto-downloads |
 | `AI_TRACKING_MODEL_DIR` | `/models` | Cache directory for the auto-downloaded weights |
@@ -685,11 +734,11 @@ Environment variables:
 | `AI_DEPTH_MODEL_KIND` | `midas` | `midas` (inverse depth) or `depth_anything` (depth) |
 | `AI_DEPTH_INPUT_SIZE` | `256` | Input size used when a model declares a dynamic shape (`518` for Depth Anything V2) |
 
-The default image already contains `onnxruntime` + numpy. If you built with
-`--build-arg INSTALL_AI_TRACKING=0`, reinstall with `pip install -r backend/requirements-ai.txt`
-(or `pip install -r backend/requirements-pro.txt` for the CUDA runtime) or
-`pip install ultralytics`; without either, everything else still works and
-`/api/ai/tracking/status` explains what is missing.
+The Standard and Pro images already contain `onnxruntime` + numpy. If you built with
+`--build-arg INSTALL_AI_TRACKING=0` (the Lite image), reinstall with
+`pip install -r backend/requirements-ai.txt` (or `pip install -r backend/requirements-pro.txt` for
+the CUDA runtime) or `pip install ultralytics`, and leave `APP_EDITION` at `standard`/`pro`; with
+`APP_EDITION=lite` the AI panels stay hidden and the AI endpoints answer 503.
 
 Tests (stdlib `unittest`, no FFmpeg required; the ONNX post-processing tests skip when numpy is not
 installed):
@@ -704,11 +753,21 @@ python -m unittest discover -s tests
 [`.github/workflows/release.yml`](.github/workflows/release.yml) runs on every push to `main`:
 
 1. `git rev-list --count HEAD` (with `fetch-depth: 0`) yields the sequential commit count on `main`
-   — `1`, `2`, `16`, … — used verbatim as the image tag.
-2. The root `Dockerfile` is built with Buildx and GitHub Actions layer caching (`type=gha`,
-   `mode=max`), then pushed to `ghcr.io/harifaka/fast-frame` as `latest` and `<count>`.
-3. A GitHub Release `v<count>` is created on that commit with auto-generated notes and the
-   `docker pull` command in the body.
+   — `1`, `2`, `16`, … — shared by all three editions.
+2. A `strategy: matrix` job builds the root `Dockerfile` **three times, concurrently**, with
+   per-edition Buildx/GHA cache scopes:
+
+   | Matrix entry | Build args | Tags |
+   | --- | --- | --- |
+   | `lite` | `INSTALL_AI_TRACKING=0` | `<count>-lite`, `lite` |
+   | `standard` | `INSTALL_AI_TRACKING=1` (`INSTALL_PRO_AI=0`) | `<count>-standard`, `latest` |
+   | `pro` | `INSTALL_PRO_AI=1` | `<count>-pro`, `pro` |
+
+   All three are pushed to `ghcr.io/harifaka/fast-frame`, so `latest` always stays the Standard
+   edition.
+3. Once the matrix finishes, a single GitHub Release `v<count>` is created on that commit with
+   auto-generated notes plus a table listing the three image variants and their `docker pull`
+   commands.
 
 `concurrency` (`${{ github.workflow }}-${{ github.ref }}`, `cancel-in-progress: true`) cancels an
 older still-running build as soon as a newer commit lands on `main`, so only the newest commit
@@ -738,12 +797,13 @@ the workflow.
 ```
 fast-frame/
 ├── Dockerfile                 # 2-stage slim build (Node 20 builder -> Python 3.11 + FFmpeg + NVENC env)
-├── docker-compose.yml         # GPU passthrough + automatic host drive mounts
+├── docker-compose.yml         # Standard edition: GPU passthrough + automatic host drive mounts
+├── docker-compose.lite.yml    # Lite overlay: INSTALL_AI_TRACKING=0, APP_EDITION=lite, reduced UI
 ├── docker-compose.cpu.yml     # CPU-only override (gpus: []) for machines without NVIDIA drivers
 ├── docker-compose.ai.yml      # Optional overlay pinning a specific ONNX model file
 ├── docker-compose.pro.yml     # Pro overlay: onnxruntime-gpu + YOLO11m / Depth Anything V2 Base
 ├── models/                    # Auto-downloaded YOLO11s + MiDaS ONNX weights (or your own)
-├── .github/workflows/release.yml  # push to main -> GHCR image + v<commit-count> release
+├── .github/workflows/release.yml  # push to main -> lite/standard/pro GHCR images + v<count> release
 ├── backend/
 │   ├── main.py                # FastAPI app, WebSocket, static frontend
 │   ├── config.py              # Mount root, drive shortcuts, path-traversal defence

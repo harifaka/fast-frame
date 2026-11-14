@@ -59,9 +59,13 @@ async def lifespan(app: FastAPI):
     logger.info("Network shares (SMB/CIFS) are registered under %s", network_root)
     # Both optional ONNX models are downloaded/loaded once in the background so
     # the first AI action does not have to wait for a multi-megabyte download.
-    tracking_service.warm_up()
-    point_cloud_service.warm_up()
-    logger.info("YOLO tracker and monocular-depth models are warming up")
+    # The Lite edition ships without numpy/onnxruntime, so nothing to warm up.
+    if config.ai_features_enabled():
+        tracking_service.warm_up()
+        point_cloud_service.warm_up()
+        logger.info("YOLO tracker and monocular-depth models are warming up")
+    else:
+        logger.info("Edition %s: AI runtime skipped", config.app_edition())
     await job_manager.start()
     logger.info("Render queue worker started")
     try:
@@ -157,9 +161,11 @@ async def gpu_check(refresh: bool = False) -> dict:
 
 @app.get("/api/system/config", tags=["system"])
 async def system_config() -> dict:
+    ai_enabled = config.ai_features_enabled()
     return {
         "version": APP_VERSION,
         "edition": config.app_edition(),
+        "ai_enabled": ai_enabled,
         "host_root": str(config.host_root()),
         "video_extensions": list(VIDEO_EXTENSIONS),
         "spherical_extensions": list(SPHERICAL_EXTENSIONS),
@@ -176,22 +182,32 @@ async def system_config() -> dict:
             "url_schemes": list(config.NETWORK_URL_SCHEMES),
         },
         "ai_view": {
-            "enabled": True,
-            "mcp_ready": True,
+            "enabled": ai_enabled,
+            "mcp_ready": ai_enabled,
             "view_state_endpoint": "/api/ai/view-state",
             "mcp_command_endpoint": "/api/ai/mcp-command",
             "tracking_modes": list(TRACKING_MODES),
             "tracking": {
-                "enabled": True,
+                "enabled": ai_enabled,
                 "status_endpoint": "/api/ai/tracking/status",
                 "toggle_endpoint": "/api/ai/tracking",
                 "analyze_endpoint": "/api/ai/tracking/analyze",
                 "frame_endpoint": "/api/ai/tracking/frame",
-                "detector": tracking_service.status(),
+                "detector": tracking_service.status()
+                if ai_enabled
+                else {
+                    "available": False,
+                    "loading": False,
+                    "backend": None,
+                    "provider": None,
+                    "weights": None,
+                    "edition": config.app_edition(),
+                    "reason": "The Lite edition ships without the AI runtime",
+                },
             },
         },
         "point_cloud": {
-            "enabled": True,
+            "enabled": ai_enabled,
             "generate_endpoint": "/api/ai/point-cloud/generate",
             "status_endpoint": "/api/ai/point-cloud/status",
             "defaults": point_cloud_service.defaults(),

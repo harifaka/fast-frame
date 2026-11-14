@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
 
 import config
@@ -35,6 +35,26 @@ from services.point_cloud_service import (
 from services.yolo_tracking_service import TrackingError, tracking_service
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
+
+
+def require_ai_runtime() -> None:
+    """Reject AI-only routes on the Lite edition.
+
+    ``docker-compose.lite.yml`` builds with ``INSTALL_AI_TRACKING=0``, so numpy
+    and onnxruntime are absent and these endpoints could only fail confusingly.
+    The framing state routes stay available because the 360° preview still uses
+    them to persist pan/tilt/zoom while the user drags around a spherical clip.
+    """
+
+    if not config.ai_features_enabled():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "The Lite edition ships without the AI runtime. "
+                "Use the standard or pro image for YOLO tracking, depth point clouds "
+                "and horizon auto-align."
+            ),
+        )
 
 
 @router.get("/view-state")
@@ -72,7 +92,7 @@ async def reset_view_state() -> dict[str, Any]:
     return ai_view_state.reset()
 
 
-@router.get("/tracking/status")
+@router.get("/tracking/status", dependencies=[Depends(require_ai_runtime)])
 async def tracking_status() -> dict[str, Any]:
     """Detector availability plus the current auto-framing configuration."""
 
@@ -86,7 +106,7 @@ async def tracking_status() -> dict[str, Any]:
     }
 
 
-@router.post("/tracking")
+@router.post("/tracking", dependencies=[Depends(require_ai_runtime)])
 async def update_tracking(update: AiTrackingUpdate) -> dict[str, Any]:
     """Toggle AI auto-framing or switch the strength level."""
 
@@ -103,7 +123,7 @@ async def update_tracking(update: AiTrackingUpdate) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-@router.delete("/tracking")
+@router.delete("/tracking", dependencies=[Depends(require_ai_runtime)])
 async def clear_tracking() -> dict[str, Any]:
     """Disable auto-framing and drop the analysed keyframes."""
 
@@ -120,7 +140,7 @@ async def clear_tracking() -> dict[str, Any]:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-@router.post("/tracking/analyze")
+@router.post("/tracking/analyze", dependencies=[Depends(require_ai_runtime)])
 async def analyze_tracking(payload: AiTrackingAnalyzeRequest) -> dict[str, Any]:
     """Run the YOLO pass over a source and store the resulting keyframes."""
 
@@ -166,7 +186,7 @@ async def analyze_tracking(payload: AiTrackingAnalyzeRequest) -> dict[str, Any]:
     return {"analysis": summary, "view_state": new_state}
 
 
-@router.post("/auto-align")
+@router.post("/auto-align", dependencies=[Depends(require_ai_runtime)])
 async def auto_align(payload: AiAutoAlignRequest) -> dict[str, Any]:
     """Estimate the horizon roll of a 360° source and optionally apply it."""
 
@@ -207,7 +227,7 @@ async def auto_align(payload: AiAutoAlignRequest) -> dict[str, Any]:
     return {"alignment": alignment, "view_state": state}
 
 
-@router.get("/tracking/frame")
+@router.get("/tracking/frame", dependencies=[Depends(require_ai_runtime)])
 async def tracking_frame(
     path: str = Query(min_length=1),
     time: float = Query(default=0.0, ge=0),
@@ -228,14 +248,14 @@ async def tracking_frame(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-@router.get("/point-cloud/status")
+@router.get("/point-cloud/status", dependencies=[Depends(require_ai_runtime)])
 async def point_cloud_status() -> dict[str, Any]:
     """Depth-model availability plus the current point cloud export progress."""
 
     return point_cloud_service.status()
 
 
-@router.post("/point-cloud/generate")
+@router.post("/point-cloud/generate", dependencies=[Depends(require_ai_runtime)])
 async def generate_point_cloud(payload: PointCloudGenerateRequest) -> dict[str, Any]:
     """Sample a local clip, estimate depth and write a binary ``.ply`` cloud."""
 

@@ -115,6 +115,7 @@ export default function VideoWorkspace({
   videoRef,
   aiView,
   onAiViewChange,
+  aiEnabled = true,
   children,
 }) {
   const containerRef = useRef(null)
@@ -148,6 +149,9 @@ export default function VideoWorkspace({
   const spherical = metadata?.spherical || null
   const isSpherical = Boolean(spherical)
   const isStill = Boolean(spherical?.is_still)
+  // Lite ships without the AI runtime: keep the 360° drag surface but drop
+  // every YOLO/AI affordance (toggle chips, tracking boxes, debug frame poll).
+  const aiFeatures = aiEnabled !== false
   const aiActive = Boolean(aiView?.active)
   const aiTrackingEnabled = Boolean(aiView?.ai_tracking_enabled)
   const aiTrackingLevel = Number(aiView?.ai_tracking_level) || 2
@@ -196,7 +200,7 @@ export default function VideoWorkspace({
   // Poll a single decoded frame while auto-framing is on so the preview can
   // show what YOLO currently sees without streaming every frame through it.
   useEffect(() => {
-    if (!sourcePath || !aiTrackingEnabled || !showAiBox) {
+    if (!aiFeatures || !sourcePath || !aiTrackingEnabled || !showAiBox) {
       setAiFrame(null)
       return undefined
     }
@@ -221,7 +225,7 @@ export default function VideoWorkspace({
       cancelled = true
       if (timer) window.clearTimeout(timer)
     }
-  }, [sourcePath, aiTrackingEnabled, showAiBox, aiTrackingLevel])
+  }, [aiFeatures, sourcePath, aiTrackingEnabled, showAiBox, aiTrackingLevel])
 
   useEffect(() => {
     setPlaying(false)
@@ -568,7 +572,7 @@ export default function VideoWorkspace({
               360° {spherical?.projection === 'dual_fisheye' ? 'Dual fisheye' : 'Equirect'}
             </span>
           )}
-          {isSpherical && (
+          {aiFeatures && isSpherical && (
             <button
               type="button"
               onClick={() => setShowAiView((value) => !value)}
@@ -580,7 +584,7 @@ export default function VideoWorkspace({
               AI view
             </button>
           )}
-          {aiTrackingEnabled && (
+          {aiFeatures && aiTrackingEnabled && (
             <button
               type="button"
               onClick={() => setShowAiBox((value) => !value)}
@@ -592,7 +596,7 @@ export default function VideoWorkspace({
               Track boxes
             </button>
           )}
-          {aiActive && (
+          {aiFeatures && aiActive && (
             <span className="chip border-emerald-500/30 bg-emerald-500/10 text-emerald-300">
               <Crosshair className="h-3 w-3" />
               AI {aiView?.tracking_mode || 'manual'} {aiView?.controller === 'mcp' ? '· MCP' : ''}
@@ -700,61 +704,65 @@ export default function VideoWorkspace({
               />
             )}
 
-            {isSpherical && showAiView && (
+            {isSpherical && (showAiView || !aiFeatures) && (
               <div
                 className={`absolute inset-0 touch-none ${
                   onAiViewChange ? 'pointer-events-auto cursor-grab active:cursor-grabbing' : 'pointer-events-none'
                 }`}
-                aria-label="Neutral AI framing viewport"
+                aria-label={aiFeatures ? 'Neutral AI framing viewport' : '360° spherical viewport'}
                 data-active={aiActive}
                 onPointerDown={startViewDrag}
                 onPointerMove={moveViewDrag}
                 onPointerUp={endViewDrag}
                 onPointerCancel={endViewDrag}
               >
-                <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(rgba(148,163,184,0.10)_1px,transparent_1px),linear-gradient(90deg,rgba(148,163,184,0.10)_1px,transparent_1px)] bg-[size:10%_20%] opacity-70" />
-                <div
-                  className={`pointer-events-none absolute border ${
-                    aiActive
-                      ? 'border-emerald-400/90 shadow-[0_0_0_1px_rgba(52,211,153,0.25),0_0_28px_rgba(52,211,153,0.18)]'
-                      : 'border-accent-400/70'
-                  }`}
-                  style={{
-                    left: `${aiFrustum.left}%`,
-                    top: `${aiFrustum.top}%`,
-                    width: `${aiFrustum.widthPct}%`,
-                    height: `${aiFrustum.heightPct}%`,
-                  }}
-                >
-                  <span
-                    className={`absolute -top-5 left-0 rounded px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider ${
-                      aiActive ? 'bg-emerald-500/90 text-slate-950' : 'bg-black/70 text-accent-200'
-                    }`}
-                  >
-                    AI view {aiFov.toFixed(0)}° · {effectiveZoom.toFixed(1)}×
-                  </span>
-                  <Crosshair className="absolute left-1/2 top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 text-white/60" />
-                  {['-left-1 -top-1', '-right-1 -top-1', '-bottom-1 -left-1', '-bottom-1 -right-1'].map(
-                    (position) => (
+                {aiFeatures && (
+                  <>
+                    <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(rgba(148,163,184,0.10)_1px,transparent_1px),linear-gradient(90deg,rgba(148,163,184,0.10)_1px,transparent_1px)] bg-[size:10%_20%] opacity-70" />
+                    <div
+                      className={`pointer-events-none absolute border ${
+                        aiActive
+                          ? 'border-emerald-400/90 shadow-[0_0_0_1px_rgba(52,211,153,0.25),0_0_28px_rgba(52,211,153,0.18)]'
+                          : 'border-accent-400/70'
+                      }`}
+                      style={{
+                        left: `${aiFrustum.left}%`,
+                        top: `${aiFrustum.top}%`,
+                        width: `${aiFrustum.widthPct}%`,
+                        height: `${aiFrustum.heightPct}%`,
+                      }}
+                    >
                       <span
-                        key={position}
-                        className={`absolute h-2 w-2 ${position} ${
-                          aiActive ? 'bg-emerald-400' : 'bg-accent-400'
+                        className={`absolute -top-5 left-0 rounded px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider ${
+                          aiActive ? 'bg-emerald-500/90 text-slate-950' : 'bg-black/70 text-accent-200'
                         }`}
-                      />
-                    ),
-                  )}
-                </div>
-                <span className="pointer-events-none absolute bottom-2 left-2 flex items-center gap-1.5 rounded bg-black/70 px-2 py-1 font-mono text-[9px] uppercase tracking-wider text-slate-300">
-                  <Sparkles className="h-3 w-3 text-accent-300" />
-                  pan {effectivePan.toFixed(0)}° / tilt {effectiveTilt.toFixed(0)}°
-                  {Math.abs(aiRoll) >= 0.1 ? ` / level ${aiRoll.toFixed(1)}°` : ''}
-                  <span className="text-slate-500">· drag to look · scroll to zoom</span>
-                </span>
+                      >
+                        AI view {aiFov.toFixed(0)}° · {effectiveZoom.toFixed(1)}×
+                      </span>
+                      <Crosshair className="absolute left-1/2 top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 text-white/60" />
+                      {['-left-1 -top-1', '-right-1 -top-1', '-bottom-1 -left-1', '-bottom-1 -right-1'].map(
+                        (position) => (
+                          <span
+                            key={position}
+                            className={`absolute h-2 w-2 ${position} ${
+                              aiActive ? 'bg-emerald-400' : 'bg-accent-400'
+                            }`}
+                          />
+                        ),
+                      )}
+                    </div>
+                    <span className="pointer-events-none absolute bottom-2 left-2 flex items-center gap-1.5 rounded bg-black/70 px-2 py-1 font-mono text-[9px] uppercase tracking-wider text-slate-300">
+                      <Sparkles className="h-3 w-3 text-accent-300" />
+                      pan {effectivePan.toFixed(0)}° / tilt {effectiveTilt.toFixed(0)}°
+                      {Math.abs(aiRoll) >= 0.1 ? ` / level ${aiRoll.toFixed(1)}°` : ''}
+                      <span className="text-slate-500">· drag to look · scroll to zoom</span>
+                    </span>
+                  </>
+                )}
               </div>
             )}
 
-            {aiTrackingEnabled && showAiBox && aiFrame?.available && (
+            {aiFeatures && aiTrackingEnabled && showAiBox && aiFrame?.available && (
               <div className="pointer-events-none absolute inset-0" aria-label="YOLO tracking boxes">
                 {(aiFrame.detections || []).map((item) => {
                   const key = `${item.x}-${item.y}-${item.w}`

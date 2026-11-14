@@ -18,9 +18,13 @@ env:
   IMAGE_NAME: ghcr.io/${{ github.repository }}
 
 jobs:
-  build-and-release:
-    name: Build, push and release
+  # One shared sequential version: every edition is tagged <count>-<edition>
+  # plus a moving alias (latest / lite / pro).
+  prepare:
+    name: Compute sequential version
     runs-on: ubuntu-latest
+    outputs:
+      count: ${{ steps.version.outputs.count }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -33,7 +37,38 @@ jobs:
         run: |
           COUNT="$(git rev-list --count HEAD)"
           echo "count=$COUNT" >> "$GITHUB_OUTPUT"
-          echo "Image tag: $COUNT | Release tag: v$COUNT"
+          echo "Image tags: $COUNT-lite / $COUNT-standard / $COUNT-pro | Release tag: v$COUNT"
+
+  build:
+    name: Build ${{ matrix.edition }} image
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      # Never cancel a sibling edition when one fails.
+      fail-fast: false
+      matrix:
+        include:
+          # Ultra-minimal: no numpy/onnxruntime, reduced UI, alias tag `lite`.
+          - edition: lite
+            install_ai: "0"
+            install_pro: "0"
+            alias_tag: lite
+            description: Fast-Frame Lite - cutting, speed, 360 preview, no AI runtime
+          # Default: CPU ONNX AI (YOLO11s + MiDaS), alias tag `latest`.
+          - edition: standard
+            install_ai: "1"
+            install_pro: "0"
+            alias_tag: latest
+            description: Fast-Frame Standard - CPU AI auto-framing and point clouds
+          # Heavyweight: CUDA ONNX runtime (YOLO11m + Depth Anything V2), alias `pro`.
+          - edition: pro
+            install_ai: "1"
+            install_pro: "1"
+            alias_tag: pro
+            description: Fast-Frame Pro - GPU AI auto-framing and point clouds
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -55,37 +90,67 @@ jobs:
           # metadata-action lowercases the repository name automatically.
           images: ${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=latest
-            type=raw,value=${{ steps.version.outputs.count }}
+            type=raw,value=${{ needs.prepare.outputs.count }}-${{ matrix.edition }}
+            type=raw,value=${{ matrix.alias_tag }}
           labels: |
-            org.opencontainers.image.title=Fast-Frame
-            org.opencontainers.image.description=GPU-accelerated video speed and processing studio
-            org.opencontainers.image.version=${{ steps.version.outputs.count }}
+            org.opencontainers.image.title=Fast-Frame (${{ matrix.edition }})
+            org.opencontainers.image.description=${{ matrix.description }}
+            org.opencontainers.image.version=${{ needs.prepare.outputs.count }}-${{ matrix.edition }}
             org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.vendor=harifaka
+            com.harifaka.fast-frame.edition=${{ matrix.edition }}
 
-      - name: Build and push image
+      - name: Build and push ${{ matrix.edition }} image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
           push: true
+          build-args: |
+            INSTALL_AI_TRACKING=${{ matrix.install_ai }}
+            INSTALL_PRO_AI=${{ matrix.install_pro }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Per-edition cache scopes keep the three parallel builds apart.
+          cache-from: type=gha,scope=${{ matrix.edition }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.edition }}
 
+  release:
+    name: Create GitHub release
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    steps:
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.version.outputs.count }}
-          name: v${{ steps.version.outputs.count }}
+          tag_name: v${{ needs.prepare.outputs.count }}
+          name: v${{ needs.prepare.outputs.count }}
           target_commitish: ${{ github.sha }}
           generate_release_notes: true
           body: |
-            Docker image published to GHCR:
+            Three Fast-Frame editions are published to GHCR from this commit:
+
+            | Edition | Pull | Highlights |
+            | --- | --- | --- |
+            | **Lite** | `docker pull ${{ env.IMAGE_NAME }}:lite` | No AI runtime, reduced UI, smallest image |
+            | **Standard** | `docker pull ${{ env.IMAGE_NAME }}:latest` | CPU AI (YOLO11s + MiDaS), full UI |
+            | **Pro** | `docker pull ${{ env.IMAGE_NAME }}:pro` | GPU AI (YOLO11m + Depth Anything V2), full UI |
+
+            Pinned tags for this build: `${{ needs.prepare.outputs.count }}-lite`,
+            `${{ needs.prepare.outputs.count }}-standard` and
+            `${{ needs.prepare.outputs.count }}-pro`.
+
+            Compose users can run any edition from a clone:
 
             ```bash
-            docker pull ${{ env.IMAGE_NAME }}:${{ steps.version.outputs.count }}
-            ```
+            # Standard (default)
+            docker compose pull && docker compose up -d
 
-            Also available as `${{ env.IMAGE_NAME }}:latest`.
+            # Lite
+            docker compose -f docker-compose.yml -f docker-compose.lite.yml pull
+            docker compose -f docker-compose.yml -f docker-compose.lite.yml up -d
+
+            # Pro
+            docker compose -f docker-compose.yml -f docker-compose.pro.yml pull
+            docker compose -f docker-compose.yml -f docker-compose.pro.yml up -d
+            ```

@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CircleAlert, X } from 'lucide-react'
 import { api, openProgressSocket } from './api'
+import { EDITION_STANDARD, isLiteEdition, normalizeEdition } from './edition'
 import { dirname, formatBytes, isNetworkUrl, suggestOutputName } from './utils'
 import Header from './components/Header'
 import FileBrowser from './components/FileBrowser'
@@ -67,6 +68,7 @@ export default function App() {
   const [gpuError, setGpuError] = useState(null)
   const [refreshing, setRefreshing] = useState(false)
   const [appConfig, setAppConfig] = useState(null)
+  const [edition, setEdition] = useState(EDITION_STANDARD)
 
   const [browser, setBrowser] = useState(null)
   const [sourcePath, setSourcePath] = useState(null)
@@ -99,6 +101,10 @@ export default function App() {
   const [pointCloudView, setPointCloudView] = useState(null)
   const [pointCloudHistory, setPointCloudHistory] = useState(readPointCloudHistory)
   const settingsRef = useRef(settings)
+
+  // The Lite image is built without numpy/onnxruntime: every AI panel and
+  // polling loop is skipped, leaving cutting, speed, 360° preview and crop.
+  const aiEnabled = !isLiteEdition(edition)
 
   useEffect(() => {
     settingsRef.current = settings
@@ -254,6 +260,7 @@ export default function App() {
 
   const runAutoAlign = useCallback(
     async (path = sourcePath, apply = true) => {
+      if (!aiEnabled) return null
       if (!path) {
         setAiAutoAlignError('Select a 360° source before auto-aligning the horizon.')
         return null
@@ -271,7 +278,7 @@ export default function App() {
         setAiAutoAligning(false)
       }
     },
-    [sourcePath],
+    [aiEnabled, sourcePath],
   )
 
   const refreshPointCloud = useCallback(async () => {
@@ -336,21 +343,26 @@ export default function App() {
     loadGpu()
     api
       .config()
-      .then(setAppConfig)
+      .then((config) => {
+        setAppConfig(config)
+        setEdition(normalizeEdition(config?.edition))
+      })
       .catch((error) => setNotice({ type: 'error', message: error.message }))
   }, [loadGpu])
 
   useEffect(() => {
+    if (!aiEnabled) return undefined
     refreshAiView(true)
     const timer = window.setInterval(() => refreshAiView(), 4000)
     return () => window.clearInterval(timer)
-  }, [refreshAiView])
+  }, [aiEnabled, refreshAiView])
 
   useEffect(() => {
+    if (!aiEnabled) return undefined
     refreshPointCloud()
     const timer = window.setInterval(() => refreshPointCloud(), 2500)
     return () => window.clearInterval(timer)
-  }, [refreshPointCloud])
+  }, [aiEnabled, refreshPointCloud])
 
   useEffect(() => {
     if (pointCloud?.state === 'completed' && pointCloud.output) {
@@ -463,7 +475,7 @@ export default function App() {
           tracking_analysis: null,
           horizon_alignment: null,
         })
-        if (sphericalSource && settingsRef.current.autoAlignHorizon) {
+        if (sphericalSource && aiEnabled && settingsRef.current.autoAlignHorizon) {
           runAutoAlign(path, true)
         }
         setSettings((previous) => ({
@@ -483,7 +495,7 @@ export default function App() {
         setMetadataLoading(false)
       }
     },
-    [loadSubtitles, runAutoAlign, updateAiView],
+    [aiEnabled, loadSubtitles, runAutoAlign, updateAiView],
   )
 
   const previousAutoAlign = useRef(settings.autoAlignHorizon)
@@ -557,7 +569,9 @@ export default function App() {
             crop: settings.crop,
             roll: metadata?.spherical ? Number(aiView?.roll) || 0 : 0,
             ai_tracking:
-              aiView?.ai_tracking_enabled && (aiView?.tracking_keyframes?.length || 0) > 1
+              aiEnabled &&
+              aiView?.ai_tracking_enabled &&
+              (aiView?.tracking_keyframes?.length || 0) > 1
                 ? {
                     enabled: true,
                     level: Number(aiView.ai_tracking_level) || 2,
@@ -583,7 +597,7 @@ export default function App() {
         setSubmitting(false)
       }
     },
-    [aiView, metadata, settings, sourcePath, targetDir],
+    [aiEnabled, aiView, metadata, settings, sourcePath, targetDir],
   )
 
   const cancelJob = useCallback(async (jobId) => {
@@ -715,6 +729,7 @@ export default function App() {
             videoRef={videoRef}
             aiView={aiView}
             onAiViewChange={updateAiView}
+            aiEnabled={aiEnabled}
           >
             <Timeline
               duration={metadata?.duration || 0}
@@ -746,7 +761,8 @@ export default function App() {
         }}
         videoExtensions={appConfig?.video_extensions || ['.mp4', '.mkv', '.avi']}
         subtitleExtensions={appConfig?.subtitle_extensions || ['.srt']}
-        onViewPointCloud={openPointCloudViewer}
+        onViewPointCloud={aiEnabled ? openPointCloudViewer : undefined}
+        allowPointCloud={aiEnabled}
         suppressEscape={Boolean(pointCloudView)}
       />
 
@@ -763,6 +779,7 @@ export default function App() {
       <ControlPanel
         open={configOpen}
         onClose={closeConfig}
+        edition={edition}
         focusSection={configRequest}
         metadata={metadata}
         sourcePath={sourcePath}
@@ -810,7 +827,7 @@ export default function App() {
         suppressEscape={Boolean(pointCloudView)}
       />
 
-      {pointCloudView ? (
+      {aiEnabled && pointCloudView ? (
         <Suspense
           fallback={
             <div className="fixed inset-0 z-[60] grid place-items-center bg-black/95 text-xs text-slate-400">

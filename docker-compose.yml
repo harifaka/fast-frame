@@ -3,6 +3,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # Standard edition: CPU ONNX runtime (YOLO11s + MiDaS).
+        INSTALL_AI_TRACKING: "1"
+        INSTALL_PRO_AI: "0"
     # Same name the CI pipeline publishes to, so a locally built image and the
     # pre-built GHCR image are interchangeable. Pin a release with
     # FAST_FRAME_TAG=<count>:
@@ -15,6 +19,8 @@ services:
       # Bind all interfaces so Windows 10/11 LAN devices can reach the studio.
       - "0.0.0.0:8000:8000"
     environment:
+      # Standard edition: full UI, CPU AI (YOLO11s + MiDaS).
+      APP_EDITION: standard
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,video,utility
       HOST_MOUNT_PATH: /mnt/host

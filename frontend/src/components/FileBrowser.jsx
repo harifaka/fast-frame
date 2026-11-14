@@ -51,6 +51,7 @@ export default function FileBrowser({
   onClose,
   onSelect,
   onViewPointCloud,
+  allowPointCloud = true,
   videoExtensions,
   subtitleExtensions,
   suppressEscape = false,
@@ -65,6 +66,8 @@ export default function FileBrowser({
 
   const isSource = mode === 'source'
   const pointCloudMode = mode === 'point-cloud'
+  // The Lite edition has no 3D viewer: .ply files become plain files.
+  const canViewPointCloud = allowPointCloud && Boolean(onViewPointCloud)
 
   const load = useCallback(async (path) => {
     setLoading(true)
@@ -147,7 +150,9 @@ export default function FileBrowser({
       : null
 
   const pointCloudSelection =
-    selected && !selected.is_dir && isPointCloudPath(selected.path) ? selected : null
+    canViewPointCloud && selected && !selected.is_dir && isPointCloudPath(selected.path)
+      ? selected
+      : null
 
   const viewSelectedPointCloud = () => {
     if (!pointCloudSelection) return
@@ -296,12 +301,13 @@ export default function FileBrowser({
                   entries={entries}
                   isSource={isSource}
                   pointCloudOnly={pointCloudMode}
+                  allowPointCloud={canViewPointCloud}
                   selectedPath={selected?.path}
                   onPick={setSelected}
                   onOpen={(entry) => {
                     if (entry.is_dir) enterDirectory(entry)
                     else if (isSource && entry.kind === 'video') onSelect(entry.path)
-                    else if (isPointCloudPath(entry.path)) {
+                    else if (canViewPointCloud && isPointCloudPath(entry.path)) {
                       onViewPointCloud?.(entry.path)
                       if (pointCloudMode) onClose()
                     }

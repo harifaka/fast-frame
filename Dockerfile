@@ -50,18 +50,24 @@ RUN pip install --no-cache-dir --upgrade pip \
 
 # YOLO auto-framing + monocular-depth point clouds share one runtime
 # (numpy + onnxruntime). Installed by default so AI tracking and the 3D
-# exporter work out of the box; pass --build-arg INSTALL_AI_TRACKING=0 for
-# the slim image without them. PyTorch is never installed.
+# exporter work out of the box (Standard edition).
+#
+# Edition build matrix (Phase 14):
+#   lite     --build-arg INSTALL_AI_TRACKING=0   no numpy/onnxruntime at all
+#   standard --build-arg INSTALL_AI_TRACKING=1   CPU onnxruntime + YOLO11s/MiDaS
+#   pro      --build-arg INSTALL_PRO_AI=1        onnxruntime-gpu + CUDA 13 wheels
 #
 # INSTALL_PRO_AI=1 (used by docker-compose.pro.yml) swaps the CPU runtime for
 # onnxruntime-gpu plus the CUDA 13 / cuDNN 9 wheels, so the heavyweight Pro
-# models execute on the host's NVIDIA GPU.
+# models execute on the host's NVIDIA GPU. PyTorch is never installed.
 ARG INSTALL_AI_TRACKING=1
 ARG INSTALL_PRO_AI=0
 RUN if [ "$INSTALL_PRO_AI" = "1" ]; then \
         pip install --no-cache-dir -r requirements-pro.txt; \
     elif [ "$INSTALL_AI_TRACKING" = "1" ]; then \
         pip install --no-cache-dir -r requirements-ai.txt; \
+    else \
+        echo "Lite edition: skipping numpy/onnxruntime"; \
     fi
 
 COPY backend/ backend/
@@ -72,9 +78,10 @@ COPY --from=frontend-build /frontend/dist frontend/dist
 # AI_TRACKING_MODEL / AI_DEPTH_MODEL are empty the services download the
 # YOLO11s detector (~36 MB) and the MiDaS v2.1 Small depth model (~64 MB) once
 # into AI_TRACKING_MODEL_DIR (bind-mount it to keep them cached).
-# docker-compose.pro.yml overrides APP_EDITION and both model URLs with the
-# heavyweight YOLO11m / Depth Anything V2 weights.
-ENV APP_EDITION=community \
+# docker-compose.lite.yml sets APP_EDITION=lite so no AI endpoint or panel is
+# exposed; docker-compose.pro.yml overrides APP_EDITION and both model URLs
+# with the heavyweight YOLO11m / Depth Anything V2 weights.
+ENV APP_EDITION=standard \
     AI_TRACKING_BACKEND=auto \
     AI_TRACKING_MODEL= \
     AI_TRACKING_MODEL_DIR=/models \

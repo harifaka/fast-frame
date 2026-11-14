@@ -1,0 +1,27 @@
+# Lite edition overlay (Phase 14).
+#
+# Ultra-minimal image: no numpy, no onnxruntime, no AI models and a reduced UI
+# (no AI View panel, no 3D point cloud export, no YOLO badges). Cutting, speed,
+# multi-cut, encoding, crop/rotate and the native 360° drag preview stay.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.lite.yml up --build -d
+#
+# Everything else - container name, ports, host mounts and NVIDIA passthrough
+# for NVENC - is inherited from docker-compose.yml; only the build and the
+# edition flag change.
+#
+# Pre-built image: ghcr.io/harifaka/fast-frame:lite (pinned: <count>-lite)
+#   docker compose -f docker-compose.yml -f docker-compose.lite.yml pull
+services:
+  fast-frame:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Skip requirements-ai.txt entirely: the runtime has no ONNX stack.
+        INSTALL_AI_TRACKING: "0"
+        INSTALL_PRO_AI: "0"
+    # Separate tag so a Lite build never overwrites the Standard/Pro images.
+    image: ghcr.io/harifaka/fast-frame:${FAST_FRAME_LITE_TAG:-lite}
+    environment:
+      APP_EDITION: lite

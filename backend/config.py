@@ -45,13 +45,35 @@ GPU_INFO_CACHE_SECONDS = 30.0
 FFMPEG_BIN = os.environ.get("FFMPEG_BIN", "ffmpeg")
 FFPROBE_BIN = os.environ.get("FFPROBE_BIN", "ffprobe")
 
-#: ``pro`` selects the heavyweight GPU AI weights (``docker-compose.pro.yml``);
-#: anything else is the default lightweight edition.
-DEFAULT_APP_EDITION = "community"
+#: Delivery editions (Phase 14):
+#:
+#: * ``lite``     - no AI runtime at all (no numpy / onnxruntime), reduced UI.
+#: * ``standard`` - default CPU AI (YOLO11s + MiDaS), full UI.
+#: * ``pro``      - GPU AI (YOLO11m + Depth Anything V2), full UI.
+APP_EDITIONS: tuple[str, ...] = ("lite", "standard", "pro")
+DEFAULT_APP_EDITION = "standard"
+#: Legacy value (``docker-compose.pro.yml`` labelled the default build ``community``).
+_EDITION_ALIASES = {"community": "standard"}
 
 
 def app_edition() -> str:
-    return os.environ.get("APP_EDITION", "").strip().lower() or DEFAULT_APP_EDITION
+    """Normalised edition name; unknown or unset values fall back to standard."""
+
+    raw = os.environ.get("APP_EDITION", "").strip().lower()
+    edition = _EDITION_ALIASES.get(raw, raw)
+    return edition if edition in APP_EDITIONS else DEFAULT_APP_EDITION
+
+
+def is_lite_edition() -> bool:
+    """True for the minimal image that ships without the AI runtime."""
+
+    return app_edition() == "lite"
+
+
+def ai_features_enabled() -> bool:
+    """Whether YOLO tracking, depth point clouds and horizon AI are available."""
+
+    return not is_lite_edition()
 
 
 def _initial_mount_path() -> Path:

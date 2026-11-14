@@ -23,8 +23,9 @@ import {
   X,
   Zap,
 } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { basename, formatBytes, formatClock, formatSpeed } from '../utils'
+import { isLiteEdition } from '../edition'
 import AiViewPanel from './AiViewPanel'
 import PointCloudPanel from './PointCloudPanel'
 
@@ -50,35 +51,43 @@ const BUILTIN_PRESETS = [
   },
 ]
 
-const GROUPS = [
-  {
-    id: 'input',
-    label: 'Input',
-    icon: Film,
-    tone: 'text-accent-400',
-    summary: 'Source · Subtitles',
-    tooltip: 'Source video, subtitle burn-in and caption font size',
-    sections: ['source', 'subtitles'],
-  },
-  {
-    id: 'output',
-    label: 'Output',
-    icon: Cpu,
-    tone: 'text-emerald-400',
-    summary: 'Speed · Encoding',
-    tooltip: 'Playback speed, codec, output filename and destination folder',
-    sections: ['speed', 'encoding'],
-  },
-  {
-    id: 'automation',
-    label: 'Automation',
-    icon: Sparkles,
-    tone: 'text-indigo-400',
-    summary: 'Presets · AI View · Point Cloud · Horizon',
-    tooltip: 'Saved presets, AI view selector, 3D point cloud export and 360° horizon levelling',
-    sections: ['presets', 'aiview', 'pointcloud', 'spherical'],
-  },
-]
+function buildGroups(aiEnabled) {
+  return [
+    {
+      id: 'input',
+      label: 'Input',
+      icon: Film,
+      tone: 'text-accent-400',
+      summary: 'Source · Subtitles',
+      tooltip: 'Source video, subtitle burn-in and caption font size',
+      sections: ['source', 'subtitles'],
+    },
+    {
+      id: 'output',
+      label: 'Output',
+      icon: Cpu,
+      tone: 'text-emerald-400',
+      summary: 'Speed · Encoding',
+      tooltip: 'Playback speed, codec, output filename and destination folder',
+      sections: ['speed', 'encoding'],
+    },
+    {
+      id: 'automation',
+      label: 'Automation',
+      icon: Sparkles,
+      tone: 'text-indigo-400',
+      summary: aiEnabled ? 'Presets · AI View · Point Cloud · Horizon' : 'Presets',
+      tooltip: aiEnabled
+        ? 'Saved presets, AI view selector, 3D point cloud export and 360° horizon levelling'
+        : 'Saved speed, codec and subtitle presets',
+      sections: aiEnabled
+        ? ['presets', 'aiview', 'pointcloud', 'spherical']
+        : ['presets'],
+    },
+  ]
+}
+
+const GROUPS = buildGroups(true)
 
 const SECTION_GROUP = Object.fromEntries(
   GROUPS.flatMap((group) => group.sections.map((id) => [id, group.id])),
@@ -183,6 +192,7 @@ export default function ControlPanel({
   subtitlesLoading = false,
   open = false,
   onClose,
+  edition = 'standard',
   focusSection = null,
   aiView = null,
   aiViewSaving = false,
@@ -209,6 +219,9 @@ export default function ControlPanel({
   suppressEscape = false,
 }) {
   const speed = Number(settings.speed) || 1
+  // The Lite image has no AI runtime: only presets stay in the Automation group.
+  const aiEnabled = !isLiteEdition(edition)
+  const groups = useMemo(() => buildGroups(aiEnabled), [aiEnabled])
   const recentClouds = pointCloudHistory.slice(0, 3)
   const encoderName =
     settings.codec === 'hevc'
@@ -229,7 +242,7 @@ export default function ControlPanel({
   const allPresets = [...BUILTIN_PRESETS, ...userPresets]
   const activePreset = allPresets.find((preset) => preset.id === selectedPreset) || null
   const canDeletePreset = Boolean(activePreset && !activePreset.builtin)
-  const groupSections = GROUPS.find((group) => group.id === activeGroup)?.sections ?? []
+  const groupSections = groups.find((group) => group.id === activeGroup)?.sections ?? []
   const groupOpen = groupSections.every((id) => openSections[id])
 
   const toggleSection = (id) =>
@@ -366,7 +379,7 @@ export default function ControlPanel({
 
         <div className="shrink-0 border-b border-white/5 bg-studio-950/90 px-3 py-2">
           <div className="grid grid-cols-3 gap-1.5" role="group" aria-label="Configuration groups">
-            {GROUPS.map((group) => {
+            {groups.map((group) => {
               const GroupIcon = group.icon
               const active = group.id === activeGroup
               return (
@@ -401,7 +414,7 @@ export default function ControlPanel({
           <div className="mt-1.5 flex items-center justify-between gap-2">
             <span className="truncate text-[10px] text-slate-600">
               {activeGroup
-                ? GROUPS.find((group) => group.id === activeGroup)?.tooltip
+                ? groups.find((group) => group.id === activeGroup)?.tooltip
                 : 'Pick a group to show its settings'}
             </span>
             {activeGroup ? (
@@ -552,15 +565,17 @@ export default function ControlPanel({
                 >
                   {sourcePath ? 'Change' : 'Choose'}
                 </button>
-                <button
-                  type="button"
-                  onClick={onBrowsePointCloud}
-                  className="flex items-center gap-1 rounded-md border border-cyan-500/30 bg-cyan-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-cyan-300 transition hover:bg-cyan-500/20 hover:text-cyan-200"
-                  title="Open a .ply point cloud in the 3D fly-through viewer"
-                >
-                  <Box className="h-3 w-3" />
-                  3D
-                </button>
+                {aiEnabled && (
+                  <button
+                    type="button"
+                    onClick={onBrowsePointCloud}
+                    className="flex items-center gap-1 rounded-md border border-cyan-500/30 bg-cyan-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-cyan-300 transition hover:bg-cyan-500/20 hover:text-cyan-200"
+                    title="Open a .ply point cloud in the 3D fly-through viewer"
+                  >
+                    <Box className="h-3 w-3" />
+                    3D
+                  </button>
+                )}
               </div>
             }
           >
@@ -580,19 +595,21 @@ export default function ControlPanel({
                       .mp4 · .mkv · .avi
                     </span>
                   </button>
-                  <button
-                    type="button"
-                    onClick={onBrowsePointCloud}
-                    className="flex w-full flex-col items-center gap-2 rounded-xl border border-dashed border-cyan-500/20 bg-cyan-500/[0.02] px-4 py-4 text-center transition hover:border-cyan-400/50 hover:bg-cyan-500/[0.06]"
-                  >
-                    <Box className="h-5 w-5 text-cyan-400/70" />
-                    <span className="text-xs font-medium text-slate-400">
-                      Open a 3D point cloud
-                    </span>
-                    <span className="text-[10px] uppercase tracking-widest text-slate-600">
-                      .ply · fly-through viewer
-                    </span>
-                  </button>
+                  {aiEnabled && (
+                    <button
+                      type="button"
+                      onClick={onBrowsePointCloud}
+                      className="flex w-full flex-col items-center gap-2 rounded-xl border border-dashed border-cyan-500/20 bg-cyan-500/[0.02] px-4 py-4 text-center transition hover:border-cyan-400/50 hover:bg-cyan-500/[0.06]"
+                    >
+                      <Box className="h-5 w-5 text-cyan-400/70" />
+                      <span className="text-xs font-medium text-slate-400">
+                        Open a 3D point cloud
+                      </span>
+                      <span className="text-[10px] uppercase tracking-widest text-slate-600">
+                        .ply · fly-through viewer
+                      </span>
+                    </button>
+                  )}
                 </div>
               ) : (
                 <>
@@ -649,49 +666,51 @@ export default function ControlPanel({
                 </>
               )}
 
-              <div className="mt-3 rounded-lg border border-cyan-500/20 bg-cyan-500/[0.05] px-2.5 py-2">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-cyan-300">
-                    <Box className="h-3 w-3" />
-                    3D point clouds
-                  </span>
-                  <button
-                    type="button"
-                    onClick={onBrowsePointCloud}
-                    className="text-[10px] font-medium text-cyan-300 hover:text-cyan-200"
-                    title="Browse host drives for a .ply file"
-                  >
-                    Open .ply…
-                  </button>
+              {aiEnabled && (
+                <div className="mt-3 rounded-lg border border-cyan-500/20 bg-cyan-500/[0.05] px-2.5 py-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-cyan-300">
+                      <Box className="h-3 w-3" />
+                      3D point clouds
+                    </span>
+                    <button
+                      type="button"
+                      onClick={onBrowsePointCloud}
+                      className="text-[10px] font-medium text-cyan-300 hover:text-cyan-200"
+                      title="Browse host drives for a .ply file"
+                    >
+                      Open .ply…
+                    </button>
+                  </div>
+                  {recentClouds.length === 0 ? (
+                    <p className="mt-1 text-[10px] leading-relaxed text-slate-500">
+                      Open any exported <span className="font-mono">.ply</span> and fly through it
+                      with WASD + mouse. Nothing is uploaded.
+                    </p>
+                  ) : (
+                    <ul className="mt-1.5 space-y-1">
+                      {recentClouds.map((cloud) => (
+                        <li key={cloud}>
+                          <button
+                            type="button"
+                            onClick={() => onViewPointCloud?.(cloud)}
+                            className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left transition hover:bg-white/[0.06]"
+                            title={cloud}
+                          >
+                            <Play className="h-3 w-3 shrink-0 text-cyan-300" />
+                            <span className="min-w-0 flex-1 truncate text-[11px] text-slate-300">
+                              {basename(cloud)}
+                            </span>
+                            <span className="shrink-0 text-[10px] font-medium text-cyan-300">
+                              View
+                            </span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
-                {recentClouds.length === 0 ? (
-                  <p className="mt-1 text-[10px] leading-relaxed text-slate-500">
-                    Open any exported <span className="font-mono">.ply</span> and fly through it
-                    with WASD + mouse. Nothing is uploaded.
-                  </p>
-                ) : (
-                  <ul className="mt-1.5 space-y-1">
-                    {recentClouds.map((cloud) => (
-                      <li key={cloud}>
-                        <button
-                          type="button"
-                          onClick={() => onViewPointCloud?.(cloud)}
-                          className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left transition hover:bg-white/[0.06]"
-                          title={cloud}
-                        >
-                          <Play className="h-3 w-3 shrink-0 text-cyan-300" />
-                          <span className="min-w-0 flex-1 truncate text-[11px] text-slate-300">
-                            {basename(cloud)}
-                          </span>
-                          <span className="shrink-0 text-[10px] font-medium text-cyan-300">
-                            View
-                          </span>
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
+              )}
             </div>
           </ConfigSection>
 
@@ -871,105 +890,110 @@ export default function ControlPanel({
             </div>
           </ConfigSection>
 
-          <ConfigSection
-            id="aiview"
-            title="AI View Selector"
-            icon={Sparkles}
-            tone="text-accent-400"
-            hidden={activeGroup !== 'automation'}
-            open={openSections.aiview}
-            onToggle={() => toggleSection('aiview')}
-            sectionRef={(node) => {
-              sectionRefs.current.aiview = node
-            }}
-            badge={
-              <span
-                className={`chip ${
-                  metadata?.spherical
-                    ? 'border-accent-500/30 bg-accent-500/10 text-accent-300'
-                    : 'border-white/10 bg-white/[0.03] text-slate-500'
-                }`}
-              >
-                {metadata?.spherical ? '360° source' : 'MCP ready'}
-              </span>
-            }
-          >
-            <AiViewPanel
-              state={aiView}
-              onChange={onAiViewChange}
-              onCommand={onAiViewCommand}
-              onReset={onAiViewReset}
-              onAnalyze={onAiTrackingAnalyze}
-              analyzing={aiTrackingAnalyzing}
-              analyzeError={aiTrackingError}
-              canAnalyze={Boolean(sourcePath)}
-              disabled={!sourcePath}
-              saving={aiViewSaving}
-              error={aiViewError}
-              currentTime={currentTime}
-              endpointHint={aiViewEndpoint}
-              onOpenPointCloud={() => jumpTo('pointcloud')}
-            />
-          </ConfigSection>
+          {aiEnabled && (
+            <ConfigSection
+              id="aiview"
+              title="AI View Selector"
+              icon={Sparkles}
+              tone="text-accent-400"
+              hidden={activeGroup !== 'automation'}
+              open={openSections.aiview}
+              onToggle={() => toggleSection('aiview')}
+              sectionRef={(node) => {
+                sectionRefs.current.aiview = node
+              }}
+              badge={
+                <span
+                  className={`chip ${
+                    metadata?.spherical
+                      ? 'border-accent-500/30 bg-accent-500/10 text-accent-300'
+                      : 'border-white/10 bg-white/[0.03] text-slate-500'
+                  }`}
+                >
+                  {metadata?.spherical ? '360° source' : 'MCP ready'}
+                </span>
+              }
+            >
+              <AiViewPanel
+                state={aiView}
+                onChange={onAiViewChange}
+                onCommand={onAiViewCommand}
+                onReset={onAiViewReset}
+                onAnalyze={onAiTrackingAnalyze}
+                analyzing={aiTrackingAnalyzing}
+                analyzeError={aiTrackingError}
+                canAnalyze={Boolean(sourcePath)}
+                disabled={!sourcePath}
+                saving={aiViewSaving}
+                error={aiViewError}
+                currentTime={currentTime}
+                endpointHint={aiViewEndpoint}
+                onOpenPointCloud={() => jumpTo('pointcloud')}
+              />
+            </ConfigSection>
+          )}
 
-          <ConfigSection
-            id="pointcloud"
-            title="3D Point Cloud Export (.ply)"
-            icon={Box}
-            tone="text-cyan-400"
-            hidden={activeGroup !== 'automation'}
-            open={openSections.pointcloud}
-            onToggle={() => toggleSection('pointcloud')}
-            sectionRef={(node) => {
-              sectionRefs.current.pointcloud = node
-            }}
-            badge={
-              <span
-                className={`chip ${
-                  pointCloud?.running
-                    ? 'border-cyan-500/30 bg-cyan-500/10 text-cyan-300'
+          {aiEnabled && (
+            <ConfigSection
+              id="pointcloud"
+              title="3D Point Cloud Export (.ply)"
+              icon={Box}
+              tone="text-cyan-400"
+              hidden={activeGroup !== 'automation'}
+              open={openSections.pointcloud}
+              onToggle={() => toggleSection('pointcloud')}
+              sectionRef={(node) => {
+                sectionRefs.current.pointcloud = node
+              }}
+              badge={
+                <span
+                  className={`chip ${
+                    pointCloud?.running
+                      ? 'border-cyan-500/30 bg-cyan-500/10 text-cyan-300'
+                      : pointCloud?.state === 'completed'
+                        ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                        : pointCloud?.state === 'failed'
+                          ? 'border-red-500/30 bg-red-500/10 text-red-300'
+                          : 'border-white/10 bg-white/[0.03] text-slate-500'
+                  }`}
+                >
+                  {pointCloud?.running
+                    ? `${Math.round(Number(pointCloud.progress || 0) * 100)}%`
                     : pointCloud?.state === 'completed'
-                      ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                      ? `${Number(pointCloud.points || 0).toLocaleString()} pts`
                       : pointCloud?.state === 'failed'
-                        ? 'border-red-500/30 bg-red-500/10 text-red-300'
-                        : 'border-white/10 bg-white/[0.03] text-slate-500'
-                }`}
-              >
-                {pointCloud?.running
-                  ? `${Math.round(Number(pointCloud.progress || 0) * 100)}%`
-                  : pointCloud?.state === 'completed'
-                    ? `${Number(pointCloud.points || 0).toLocaleString()} pts`
-                    : pointCloud?.state === 'failed'
-                      ? 'Failed'
-                      : pointCloud?.model?.available
-                        ? 'Depth ONNX'
-                        : 'Model loading'}
-              </span>
-            }
-          >
-            <PointCloudPanel
-              status={pointCloud}
-              error={pointCloudError}
-              defaultOutputPath={pointCloudOutput}
-              duration={Number(metadata?.duration) || 0}
-              disabled={!sourcePath || !targetDir || pointCloud?.running}
-              onGenerate={onPointCloudGenerate}
-              onRefresh={onPointCloudRefresh}
-              onView3D={onViewPointCloud}
-            />
-          </ConfigSection>
+                        ? 'Failed'
+                        : pointCloud?.model?.available
+                          ? 'Depth ONNX'
+                          : 'Model loading'}
+                </span>
+              }
+            >
+              <PointCloudPanel
+                status={pointCloud}
+                error={pointCloudError}
+                defaultOutputPath={pointCloudOutput}
+                duration={Number(metadata?.duration) || 0}
+                disabled={!sourcePath || !targetDir || pointCloud?.running}
+                onGenerate={onPointCloudGenerate}
+                onRefresh={onPointCloudRefresh}
+                onView3D={onViewPointCloud}
+              />
+            </ConfigSection>
+          )}
 
-          <ConfigSection
-            id="spherical"
-            title="360° Horizon"
-            icon={Globe}
-            tone="text-fuchsia-400"
-            hidden={activeGroup !== 'automation'}
-            open={openSections.spherical}
-            onToggle={() => toggleSection('spherical')}
-            sectionRef={(node) => {
-              sectionRefs.current.spherical = node
-            }}
+          {aiEnabled && (
+            <ConfigSection
+              id="spherical"
+              title="360° Horizon"
+              icon={Globe}
+              tone="text-fuchsia-400"
+              hidden={activeGroup !== 'automation'}
+              open={openSections.spherical}
+              onToggle={() => toggleSection('spherical')}
+              sectionRef={(node) => {
+                sectionRefs.current.spherical = node
+              }}
             badge={
               <span
                 className={`chip ${
@@ -1062,7 +1086,8 @@ export default function ControlPanel({
                 pan/tilt/zoom the AI tracker and MCP agents steer.
               </p>
             </div>
-          </ConfigSection>
+            </ConfigSection>
+          )}
 
           <ConfigSection
             id="subtitles"

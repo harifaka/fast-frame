@@ -15,6 +15,7 @@ export default function FileEntryList({
   entries,
   isSource,
   pointCloudOnly = false,
+  allowPointCloud = true,
   selectedPath,
   onPick,
   onOpen,
@@ -24,7 +25,7 @@ export default function FileEntryList({
 }) {
   const directories = entries.filter((entry) => entry.is_dir)
   const playable = entries.filter((entry) => VIDEO_KINDS.has(entry.kind))
-  const pointClouds = entries.filter(isPointCloudEntry)
+  const pointClouds = allowPointCloud ? entries.filter(isPointCloudEntry) : []
   const subtitles = entries.filter((entry) => entry.kind === 'subtitle')
   const otherFiles = entries.filter(
     (entry) =>
@@ -52,7 +53,7 @@ export default function FileEntryList({
       {ordered.map((entry) => {
         const isSelected = selectedPath === entry.path
         const isVideo = entry.kind === 'video'
-        const pointCloudEntry = isPointCloudEntry(entry)
+        const pointCloudEntry = allowPointCloud && isPointCloudEntry(entry)
         const entryAllowed = pointCloudOnly ? pointCloudEntry : isSource || pointCloudEntry
         const disabled = !entry.is_dir && !entryAllowed
         return (

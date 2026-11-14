@@ -2,10 +2,10 @@
 ## GPU-Accelerated Video Speed & Processing Studio (Zero-Copy Docker WebApp)
 ## Development Roadmap & Specification
 
-**Status:** All thirteen phases (1–13) are implemented, verified and committed.
-Phase 13 (Pro edition / GPU AI) is code-complete but the heavyweight image is
-built manually by the user on demand. No roadmap item is outstanding; the phase
-specs below are the reference for behaviour that must not regress.
+**Status:** All fourteen phases (1–14) are implemented, verified and committed.
+Phase 14 (Lite / Standard / Pro editions + matrix CI) publishes three
+separately built images from the same pipeline. No roadmap item is outstanding;
+the phase specs below are the reference for behaviour that must not regress.
 
 **Contents**
 
@@ -35,13 +35,15 @@ The goal is to build a Dockerized, web-based video processing application utiliz
   `python:3.11-slim-bookworm` runs the app with FFmpeg + `cifs-utils`. `NVIDIA_VISIBLE_DEVICES` /
   `NVIDIA_DRIVER_CAPABILITIES` make the NVIDIA Container Toolkit inject the host's NVENC driver
   (`libnvidia-encode.so`, `nvidia-smi`) into the container, so no ~3 GB CUDA base image is needed.
-  `docker-compose.yml` (`gpus: all`) plus `docker-compose.cpu.yml` for machines without NVIDIA drivers.
+  `docker-compose.yml` (`gpus: all`), `docker-compose.lite.yml` (no AI runtime,
+  reduced UI) and `docker-compose.pro.yml` (CUDA AI) overlays, plus
+  `docker-compose.cpu.yml` for machines without NVIDIA drivers.
 
 ---
 
 ### 3. Phase Status at a Glance
 
-The project was built as thirteen sequential phases. Every phase below is complete and
+The project was built as fourteen sequential phases. Every phase below is complete and
 verified; the detailed specifications in section 4 are kept as the regression contract.
 
 | Phase | Scope | Status |
@@ -59,6 +61,7 @@ verified; the detailed specifications in section 4 are kept as the regression co
 | 11 | YOLO11s upgrade & lightweight ONNX 3D point cloud export | ✅ Implemented |
 | 12 | In-browser 3D point cloud viewer & fly camera | ✅ Implemented |
 | 13 | Pro edition infrastructure & heavyweight GPU AI models | ✅ Implemented (manual build) |
+| 14 | Three-tier architecture (Lite, Standard, Pro) & matrix CI/CD | ✅ Implemented |
 
 Each phase lists the tasks it delivered and its definition of done.
 
@@ -313,7 +316,7 @@ on the host's NVIDIA GPU instead of the CPU.
 1. **`docker-compose.pro.yml` overlay.** Applied on top of the base file
    (`docker compose -f docker-compose.yml -f docker-compose.pro.yml up --build -d`),
    it passes `--build-arg INSTALL_PRO_AI=1`, tags the image `…-pro` so a Pro build
-   never overwrites the released Lite image, and sets `APP_EDITION=pro`,
+   never overwrites the default image, and sets `APP_EDITION=pro`,
    `AI_TRACKING_BACKEND=onnx`, `AI_TRACKING_MODEL_URL` (YOLO11m, ~81 MB),
    `AI_DEPTH_MODEL_URL` (Depth Anything V2 **Base** ONNX, ~389 MB),
    `AI_DEPTH_MODEL_KIND=depth_anything` and `AI_DEPTH_INPUT_SIZE=518`. Host mounts,
@@ -324,7 +327,8 @@ on the host's NVIDIA GPU instead of the CPU.
    (checked before `INSTALL_AI_TRACKING`). Its `site-packages/nvidia/*/lib`
    folders go on `LD_LIBRARY_PATH`, so the GPU stack is pip-only while the driver
    keeps coming from the NVIDIA Container Toolkit. `ENV APP_EDITION=community`
-   remains the default for every non-Pro build.
+   was the default for every non-Pro build (Phase 14 renamed it to `standard`
+   and kept `community` as an alias).
 3. **CUDA-first execution providers.** `services/model_cache.py` now owns
    `ort_providers()` / `session_provider()` / `weights_label()` /
    `log_session_ready()`; `OnnxRuntimeDetector` and `DepthEstimator` create their
@@ -351,21 +355,76 @@ image is an explicit manual follow-up for the user.
 
 ---
 
+#### 🧩 PHASE 14: Three-Tier Architecture (Lite, Standard, Pro) & Matrix CI/CD ✅
+**Goal:** Split the application into three strictly defined editions — a minimal
+cutter, the current CPU-AI baseline and the GPU-heavy Pro stack — and make the
+release pipeline build and publish all three images from every push to `main`.
+
+**Delivered:**
+1. **Edition model (`backend/config.py`):** `APP_EDITIONS = ("lite", "standard", "pro")`,
+   `DEFAULT_APP_EDITION = "standard"`, `app_edition()` (normalises legacy
+   `community` → `standard` and unknown values → `standard`), `is_lite_edition()` and
+   `ai_features_enabled()`. `/api/system/config` now reports `edition`, `ai_enabled`,
+   plus `ai_view.enabled` / `point_cloud.enabled` derived from the edition, and the
+   detector status is a static "unavailable" object in Lite (no resolve is started).
+2. **Lite image (`docker-compose.lite.yml`, `Dockerfile`):** passes
+   `INSTALL_AI_TRACKING=0` / `INSTALL_PRO_AI=0`, so `requirements-ai.txt` is skipped
+   entirely — no numpy, no onnxruntime, no models — and sets `APP_EDITION=lite`.
+   The Dockerfile's default `ENV APP_EDITION` changed from `community` to `standard`.
+   `main.py` also skips the background model warm-up in Lite.
+3. **Standard + Pro build matrix:** `docker-compose.yml` passes
+   `INSTALL_AI_TRACKING=1` / `INSTALL_PRO_AI=0` and `APP_EDITION=standard`;
+   `docker-compose.pro.yml` passes `INSTALL_PRO_AI=1`, keeps `APP_EDITION=pro`, and
+   now tags `…:pro` / `${FAST_FRAME_PRO_TAG}` (Lite likewise uses
+   `${FAST_FRAME_LITE_TAG:-lite}`).
+4. **Reduced Lite UI (`frontend/src/edition.js`, `App.jsx`, `ControlPanel.jsx`,
+   `VideoWorkspace.jsx`, `FileBrowser.jsx`, `FileEntryList.jsx`):** the edition is
+   fetched from `/api/system/config`. When it is `lite`, the AI View selector, the 3D
+   Point Cloud export card, the 360° Horizon auto-align card, every point-cloud entry
+   point (browse `.ply`, history, 3D viewer) and the preview-bar AI badges
+   (`AI view`, `Track boxes`, `AI …`) are not rendered. The 360° drag-to-look /
+   scroll-to-zoom surface, speed controls, multi-cut timeline, encoding options and
+   crop/rotate stay. AI polling loops (framing state, point-cloud status, YOLO frame
+   debug) are skipped. Standard and Pro render the unchanged full interface.
+5. **API guard (`backend/routers/ai.py`):** `require_ai_runtime` returns **503** for
+   `/tracking/*`, `/point-cloud/*` and `/auto-align` on Lite instead of raising an
+   import error. `/view-state`, `/mcp-command` and `/view-state/reset` stay available
+   because the 360° preview still persists pan/tilt/zoom as framing state.
+6. **Weight-tier logging (`backend/services/model_cache.py`):** `weights_label()` now
+   maps `lite`/`standard`/`pro` to `Lite`/`Standard`/`Pro`, so session logs identify
+   the edition that loaded and the Pro CPU-fallback warning stays edition-aware.
+7. **Matrix CI (`.github/workflows/release.yml`):** a `prepare` job computes the shared
+   sequential commit count, a `strategy: matrix` job builds all three editions
+   concurrently with per-edition GHA cache scopes (no `fail-fast`), and a single
+   `release` job creates `v<count>` with release notes listing the three image
+   variants. Tags: `<count>-lite`/`lite`, `<count>-standard`/`latest`,
+   `<count>-pro`/`pro`.
+
+**Definition of Done:**
+`npm run build` succeeds, `python -m unittest discover -s tests` passes (including
+`tests/test_editions.py` and the edition-aware model-cache tests), the workflow and
+Compose files parse as valid YAML, and no Docker build was executed locally — CI
+publishes the three images.
+
+---
+
 ### 5. Remaining Work
 
-**None.** Phases 1–13 cover the product scope in this roadmap and are all shipped.
-Phase 13's Docker image is intentionally not pre-built: run
-`docker compose -f docker-compose.yml -f docker-compose.pro.yml up --build -d`
-when you want the GPU/heavyweight edition.
+**None.** Phases 1–14 cover the product scope in this roadmap and are all shipped.
+Every push to `main` now publishes the Lite, Standard and Pro images to GHCR.
+Rebuild any edition locally with
+`docker compose -f docker-compose.yml [-f docker-compose.lite.yml | -f docker-compose.pro.yml] up --build -d`
+when you want to test changes without waiting for CI.
 
 - Phase 7's heading no longer carries an in-progress marker; all Phase 7 tasks
   (multi-stage slim image, zero-config host mounts, Quick drives bar, network /
   SMB / URL sources) are implemented and verified.
-- The top-level status and phase count reflect the thirteen shipped phases.
+- The top-level status and phase count reflect the fourteen shipped phases.
 - The target structure below matches the files that actually exist — the neutral
   360° framing viewport is implemented inside `VideoWorkspace.jsx` with its
   controls in `AiViewPanel.jsx` and the horizon card in `ControlPanel.jsx`, so no
-  separate `AIViewSelector.jsx` file exists.
+  separate `AIViewSelector.jsx` file exists. The Lite edition hides those AI cards
+  at runtime via `frontend/src/edition.js` rather than shipping a second bundle.
 
 Future enhancements should be added as new numbered phases rather than reopening
 completed ones.
@@ -376,7 +435,8 @@ completed ones.
 
 ```text
 fast-frame/
-├── docker-compose.yml          # GPU passthrough + automatic host drive mounts (/run/desktop/mnt/host & C:/)
+├── docker-compose.yml          # Standard edition: GPU passthrough + automatic host drive mounts (/run/desktop/mnt/host & C:/)
+├── docker-compose.lite.yml     # Lite overlay: INSTALL_AI_TRACKING=0, APP_EDITION=lite, reduced UI
 ├── docker-compose.cpu.yml      # CPU-only override (gpus: []) for machines without NVIDIA toolkit
 ├── docker-compose.ai.yml       # Optional overlay pinning a specific ONNX model file
 ├── docker-compose.pro.yml      # Pro overlay: onnxruntime-gpu + YOLO11m / Depth Anything V2 weights
@@ -385,7 +445,7 @@ fast-frame/
 ├── ROADMAP.md
 ├── DECISIONS.md
 ├── SUMMARY.md
-├── models/                     # Auto-downloaded YOLO/Depth ONNX weights (Lite + Pro, or your own)
+├── models/                     # Auto-downloaded YOLO/Depth ONNX weights (Standard + Pro, or your own)
 ├── backend/
 │   ├── requirements.txt
 │   ├── requirements-ai.txt     # numpy/onnxruntime for YOLO tracking (installed by default)
@@ -410,7 +470,7 @@ fast-frame/
 │   │   ├── model_cache.py      # Shared atomic ONNX weight download/cache
 │   │   ├── network_service.py  # SMB/CIFS & smbprotocol zero-copy handler
 │   │   └── worker.py           # Async background FFmpeg runner & progress parser
-│   └── tests/                  # Command builder, queue helper, network, host-mount, .insp, AI view & tracking tests
+│   └── tests/                  # Command builder, queue, network, host-mount, .insp, edition & AI view/tracking tests
 └── frontend/
     ├── package.json
     ├── vite.config.js
@@ -418,6 +478,7 @@ fast-frame/
     └── src/
         ├── App.jsx
         ├── api.js
+        ├── edition.js           # Edition helpers: /api/system/config -> lite UI reduction
         ├── utils.js
         └── components/
             ├── AiViewPanel.jsx     # AI view selector, YOLO toggle, strength levels, analysis

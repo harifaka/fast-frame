@@ -161,9 +161,9 @@ def session_provider(session: Any) -> str:
 
 
 def weights_label() -> str:
-    """``"Pro"`` for the heavyweight weights, ``"Lite"`` otherwise."""
+    """Weight tier of the active edition: ``"Pro"``, ``"Standard"`` or ``"Lite"``."""
 
-    return "Pro" if app_edition() == "pro" else "Lite"
+    return {"pro": "Pro", "standard": "Standard"}.get(app_edition(), "Lite")
 
 
 def log_session_ready(

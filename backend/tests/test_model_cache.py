@@ -110,9 +110,9 @@ class SessionLoggingTests(unittest.TestCase):
                 )
         self.assertIn("fell back to the CPU provider", captured.output[0])
 
-    def test_lite_edition_does_not_warn_on_cpu(self) -> None:
+    def test_standard_edition_does_not_warn_on_cpu(self) -> None:
         logger = logging.getLogger("fastframe.test.model-cache")
-        with mock.patch.dict("os.environ", {"APP_EDITION": "community"}):
+        with mock.patch.dict("os.environ", {"APP_EDITION": "standard"}):
             with self.assertNoLogs(logger, level="WARNING"):
                 model_cache.log_session_ready(
                     logger,
@@ -120,6 +120,13 @@ class SessionLoggingTests(unittest.TestCase):
                     model_path="/models/yolo11s.onnx",
                     session=_FakeSession(["CPUExecutionProvider"]),
                 )
+
+    def test_weight_tier_tracks_the_edition(self) -> None:
+        cases = {"lite": "Lite", "standard": "Standard", "pro": "Pro", "community": "Standard"}
+        for edition, label in cases.items():
+            with self.subTest(edition=edition):
+                with mock.patch.dict("os.environ", {"APP_EDITION": edition}):
+                    self.assertEqual(model_cache.weights_label(), label)
 
 
 if __name__ == "__main__":  # pragma: no cover
